@@ -193,9 +193,11 @@ class CarInterface(CarInterfaceBase):
       # TODO: check if this is split by EV/ICE with more platforms in the future
       if ret.openpilotLongitudinalControl:
         ret.minEnableSpeed = -1.
-        ret.stopAccel = -0.25
-        ret.longitudinalTuning.kiV = [0.1, 0.25]
+        ret.stopAccel = -0.39
+        ret.longitudinalTuning.kiV = [0.1, 0.1]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+      ret.steerActuatorDelay = 0.3
+      ret.longitudinalActuatorDelay = 1.1
 
     elif candidate == CAR.CHEVROLET_EQUINOX:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
