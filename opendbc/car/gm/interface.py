@@ -163,6 +163,11 @@ class CarInterface(CarInterfaceBase):
     elif candidate == CAR.GMC_ACADIA:
       ret.minEnableSpeed = -1.  # engage speed is decided by pcm
       ret.steerActuatorDelay = 0.2
+      if ret.openpilotLongitudinalControl:
+        ret.minEnableSpeed = -1.
+        ret.stopAccel = -0.39
+        ret.longitudinalTuning.kiV = [0.5, 0.5]
+        ret.longitudinalActuatorDelay = 0.7
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.BUICK_LACROSSE:
