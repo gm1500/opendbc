@@ -199,13 +199,14 @@ class CarInterface(CarInterfaceBase):
       if ret.openpilotLongitudinalControl:
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.39
-        ret.longitudinalTuning.kiV = [0.5, 0.5]
+        ret.longitudinalTuning.kiBP = [0, 5., 35.]
+        ret.longitudinalTuning.kiV = [0.5, 0.25, 0.1]
         ret.stoppingDecelRate = 1.0  # reach brake quickly after enabling
         ret.vEgoStopping = 0.5
         ret.vEgoStarting = 0.5
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.443009
-      ret.longitudinalActuatorDelay = 0.7
+      ret.longitudinalActuatorDelay = 1.5
 
     elif candidate == CAR.CHEVROLET_EQUINOX:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
