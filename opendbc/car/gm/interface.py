@@ -197,12 +197,12 @@ class CarInterface(CarInterfaceBase):
         ret.stoppingDecelRate = 0.8  # reach brake quickly after enabling
         ret.vEgoStopping = 0.5
         ret.vEgoStarting = 0.5
-        ret.longitudinalActuatorDelay = 0.35
+        ret.longitudinalActuatorDelay = 0.3
         ret.longitudinalTuning.kf = 1.05
         ret.longitudinalTuning.kpBP = [5., 35.]  # Low speed to highway speed
         ret.longitudinalTuning.kiBP = [5., 35.]
-        ret.longitudinalTuning.kpV = [0.8, 0.6]   # More aggressive at low speeds
-        ret.longitudinalTuning.kiV = [0.05, 0.04]  # Low integral to avoid windup
+        ret.longitudinalTuning.kpV = [0.6, 0.5]   # More aggressive at low speeds
+        ret.longitudinalTuning.kiV = [0.04, 0.03]  # Low integral to avoid windup
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
     elif candidate == CAR.CHEVROLET_EQUINOX:
