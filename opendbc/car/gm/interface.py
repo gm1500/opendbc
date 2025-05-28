@@ -197,8 +197,8 @@ class CarInterface(CarInterfaceBase):
         ret.stoppingDecelRate = 0.8  # reach brake quickly after enabling
         ret.vEgoStopping = 0.5
         ret.vEgoStarting = 0.5
-        ret.longitudinalActuatorDelay = 0.25
-        ret.longitudinalTuning.kf = 1.05
+        ret.longitudinalActuatorDelay = 0.5
+        #ret.longitudinalTuning.kf = 1.05
         ret.longitudinalTuning.kiV = [0.05, 0.04]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
 
