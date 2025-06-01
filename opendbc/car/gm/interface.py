@@ -201,6 +201,8 @@ class CarInterface(CarInterfaceBase):
         #ret.longitudinalTuning.kf = 1.05
         ret.longitudinalTuning.kiV = [0.25, 0.25]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
+      ret.steerActuatorDelay = 0.412
+      ret.minSteerSpeed = -1
 
     elif candidate == CAR.CHEVROLET_EQUINOX:
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
