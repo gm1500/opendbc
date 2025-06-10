@@ -199,7 +199,7 @@ class CarInterface(CarInterfaceBase):
         ret.vEgoStarting = 0.5
         ret.longitudinalActuatorDelay = 0.625
         #ret.longitudinalTuning.kf = 1.05
-        ret.longitudinalTuning.kiV = [0.25, 0.25]
+        ret.longitudinalTuning.kiV = [0.5, 0.5]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.412
       ret.minSteerSpeed = -1
