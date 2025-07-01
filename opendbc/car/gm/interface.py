@@ -65,7 +65,7 @@ class CarInterface(CarInterfaceBase):
     assert non_linear_torque_params, "The params are not defined"
     a, b, c, _ = non_linear_torque_params
     steer_torque = (sig(latcontrol_inputs.lateral_acceleration * a) * b) + (latcontrol_inputs.lateral_acceleration * c)
-    return float(steer_torque) + friction
+    return (steer_torque / float(torque_params.latAccelFactor)) + friction
 
   def torque_from_lateral_accel_neural(self, latcontrol_inputs: LatControlInputs, torque_params: structs.CarParams.LateralTorqueTuning,
                                        lateral_accel_error: float, lateral_accel_deadzone: float, friction_compensation: bool, gravity_adjusted: bool) -> float:
