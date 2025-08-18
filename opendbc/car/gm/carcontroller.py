@@ -40,13 +40,18 @@ class CarController(CarControllerBase):
     self.packer_ch = CANPacker(DBC[self.CP.carFingerprint][Bus.chassis])
 
   def accel_to_torque(self, accel, CS, theta):
+    cdA = 0.65
+    Crr = 0.012
     """Converts desired linear acceleration into ACC torque."""
-    # tau = r * (F_linear + F_gravity + F_drag)
-    return self.CP.wheelRadius * (
-      self.CP.mass * accel +
-      self.CP.mass * ACCELERATION_DUE_TO_GRAVITY * sin(theta) +
-      self.params.DRAG_CONSTANT * CS.out.vEgo ** 2
-    )
+    F_drag = cdA * v_ego**2
+    F_rr   = Crr * self.CP.mass * 9.80665 * (1 if v_ego >= 0 else -1)
+    return CP.wheelRadius * (self.CP.mass * accel + F_drag + F_rr)
+    # # tau = r * (F_linear + F_gravity + F_drag)
+    # return self.CP.wheelRadius * (
+    #   self.CP.mass * accel +
+    #   self.CP.mass * ACCELERATION_DUE_TO_GRAVITY * sin(theta) +
+    #   self.params.DRAG_CONSTANT * CS.out.vEgo ** 2
+    # )
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
