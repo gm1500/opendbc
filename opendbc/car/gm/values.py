@@ -37,7 +37,7 @@ class CarControllerParams:
     self.MAX_BRAKE = 400  # ~ -4.0 m/s^2 with regen
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
-      self.MAX_GAS = 1346.0
+      self.MAX_GAS = 2450.0
       self.MAX_ACC_REGEN = -540.0
       self.INACTIVE_REGEN = -500.0
       # Camera ACC vehicles have no regen while enabled.
@@ -167,7 +167,7 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=16.3, tireStiffnessFactor=1.0),
+    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
