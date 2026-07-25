@@ -38,9 +38,9 @@ class CarControllerParams:
     self.DRAG_CONSTANT = 0.3  # should be reasonable for most GM cars
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
-      self.MAX_TORQUE = 3350.0 #stock previous scale found 5404, new scaled comes to 3350
-      self.MIN_TORQUE = -540.0
-      self.INACTIVE_TORQUE = -500.0
+      self.MAX_GAS = 2450.0
+      self.MAX_ACC_REGEN = -540.0
+      self.INACTIVE_REGEN = -500.0
       # Camera ACC vehicles have no regen while enabled.
       # Camera transitions to MAX_ACC_REGEN from zero gas and uses friction brakes instantly
       self.BRAKE_THRESHOLD = 0.
@@ -166,7 +166,7 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.425),
+    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
