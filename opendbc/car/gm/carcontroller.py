@@ -31,6 +31,7 @@ class CarController(CarControllerBase):
     self.cancel_counter = 0
 
     self.lka_steering_cmd_counter = 0
+    self.lka_steering_cmd_counter_initialized = False
     self.lka_icon_status_last = (False, False)
 
     self.params = CarControllerParams(self.CP)
@@ -71,16 +72,14 @@ class CarController(CarControllerBase):
       if CS.loopback_lka_steering_cmd_ts_nanos == 0 or out_of_sync:
         steer_step = self.params.STEER_STEP
 
-    self.lka_steering_cmd_counter += 1 if CS.loopback_lka_steering_cmd_updated else 0
-
     # Avoid GM EPS faults when transmitting messages too close together: skip this transmit if we
     # received the ASCMLKASteeringCmd loopback confirmation too recently
     last_lka_steer_msg_ms = (now_nanos - CS.loopback_lka_steering_cmd_ts_nanos) * 1e-6
     if (self.frame - self.last_steer_frame) >= steer_step and last_lka_steer_msg_ms > MIN_STEER_MSG_INTERVAL_MS:
       # Initialize ASCMLKASteeringCmd counter using the camera until we get a msg on the bus
-      if CS.loopback_lka_steering_cmd_ts_nanos == 0:
-        self.lka_steering_cmd_counter = CS.pt_lka_steering_cmd_counter + 1
-
+      if not self.lka_steering_cmd_counter_initialized:
+        self.lka_steering_cmd_counter = (CS.pt_lka_steering_cmd_counter + 1) % 4
+        self.lka_steering_cmd_counter_initialized = True
       if CC.latActive:
         new_torque = int(round(actuators.torque * self.params.STEER_MAX))
         apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -91,6 +90,7 @@ class CarController(CarControllerBase):
       self.apply_torque_last = apply_torque
       idx = self.lka_steering_cmd_counter % 4
       can_sends.append(gmcan.create_steering_control(self.packer_pt, CanBus.POWERTRAIN, apply_torque, idx, CC.latActive))
+      self.lka_steering_cmd_counter = (idx + 1) % 4
 
     if self.CP.openpilotLongitudinalControl:
       # Gas/regen, brakes, and UI commands - all at 25Hz
