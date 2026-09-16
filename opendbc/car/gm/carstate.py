@@ -15,6 +15,13 @@ BUTTONS_DICT = {CruiseButtons.RES_ACCEL: ButtonType.accelCruise, CruiseButtons.D
                 CruiseButtons.MAIN: ButtonType.mainCruise, CruiseButtons.CANCEL: ButtonType.cancel}
 
 
+def update_lka_button_latch(previous_pressed: bool, latched: bool, pressed: bool) -> tuple[bool, bool]:
+  """Latch a one-bit momentary LKA button at the carstate update rate."""
+  if pressed and not previous_pressed:
+    latched = not latched
+  return pressed, latched
+
+
 class CarState(CarStateBase):
   def __init__(self, CP):
     super().__init__(CP)
@@ -31,6 +38,8 @@ class CarState(CarStateBase):
 
     self.distance_button = 0
     self.lkas_button = 0
+    self.lka_button_pressed = False
+    self.lka_button_latched = False
 
   def update_button_enable(self, buttonEvents: list[structs.CarState.ButtonEvent]):
     if not self.CP.pcmCruise:
@@ -53,6 +62,8 @@ class CarState(CarStateBase):
     self.cruise_buttons = pt_cp.vl["ASCMSteeringButton"]["ACCButtons"]
     self.distance_button = pt_cp.vl["ASCMSteeringButton"]["DistanceButton"]
     self.lkas_button = pt_cp.vl["ASCMSteeringButton"]["LKAButton"]
+    self.lka_button_pressed, self.lka_button_latched = update_lka_button_latch(
+      self.lka_button_pressed, self.lka_button_latched, self.lkas_button != 0)
     self.buttons_counter = pt_cp.vl["ASCMSteeringButton"]["RollingCounter"]
     self.pscm_status = copy.copy(pt_cp.vl["PSCMStatus"])
 
@@ -121,9 +132,10 @@ class CarState(CarStateBase):
     ret.leftBlinker = pt_cp.vl["BCMTurnSignals"]["TurnSignals"] == 1
     ret.rightBlinker = pt_cp.vl["BCMTurnSignals"]["TurnSignals"] == 2
 
-    # Raw LKA switch state only. It is not a claimed persistent OEM LKAS
-    # setting. modeld consumes it only when its explicit opt-in is enabled.
-    ret.lkaButtonPressed = self.lkas_button != 0
+    # Raw LKA button plus an internal, carstate-rate latch. Neither field
+    # claims to be a persistent OEM LKAS/HUD setting.
+    ret.lkaButtonPressed = self.lka_button_pressed
+    ret.lkaButtonLatched = self.lka_button_latched
     ret.parkingBrake = pt_cp.vl["BCMGeneralPlatformStatus"]["ParkBrakeSwActive"] == 1
     ret.cruiseState.available = pt_cp.vl["ECMEngineStatus"]["CruiseMainOn"] != 0
     ret.espDisabled = pt_cp.vl["ESPStatus"]["TractionControlOn"] != 1
