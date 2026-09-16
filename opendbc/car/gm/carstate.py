@@ -30,6 +30,11 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.distance_button = 0
+    self.lkas_button = 0
+    # This is the persistent state that modeld consumes. It is populated from
+    # GM's HUD status when visible; otherwise an LKA-button press is a
+    # session-only fallback that starts safely disabled.
+    self.lkas_enabled = False
 
   def update_button_enable(self, buttonEvents: list[structs.CarState.ButtonEvent]):
     if not self.CP.pcmCruise:
@@ -44,13 +49,17 @@ class CarState(CarStateBase):
     pt_cp = can_parsers[Bus.pt]
     cam_cp = can_parsers[Bus.cam]
     loopback_cp = can_parsers[Bus.loopback]
+    lkas_hud_cps = (can_parsers[Bus.body], can_parsers[Bus.adas], can_parsers[Bus.chassis])
 
     ret = structs.CarState()
 
     prev_cruise_buttons = self.cruise_buttons
     prev_distance_button = self.distance_button
+    prev_lkas_button = self.lkas_button
+    prev_lkas_enabled = self.lkas_enabled
     self.cruise_buttons = pt_cp.vl["ASCMSteeringButton"]["ACCButtons"]
     self.distance_button = pt_cp.vl["ASCMSteeringButton"]["DistanceButton"]
+    self.lkas_button = pt_cp.vl["ASCMSteeringButton"]["LKAButton"]
     self.buttons_counter = pt_cp.vl["ASCMSteeringButton"]["RollingCounter"]
     self.pscm_status = copy.copy(pt_cp.vl["PSCMStatus"])
 
@@ -119,6 +128,25 @@ class CarState(CarStateBase):
     ret.leftBlinker = pt_cp.vl["BCMTurnSignals"]["TurnSignals"] == 1
     ret.rightBlinker = pt_cp.vl["BCMTurnSignals"]["TurnSignals"] == 2
 
+    # The low-speed message drives GM's LKAS/HUD disabled indicator. It is
+    # parsed opportunistically on every externally-visible CAN bus, and only
+    # overrides the fallback when a fresh message arrived this update.
+    lkas_hud_enabled = None
+    newest_hud_timestamp = 0
+    for hud_cp in lkas_hud_cps:
+      signal_updates = hud_cp.vl_all["Lane_Departure_Warning_LS"]["LnKpAstDisbldIO"]
+      if signal_updates:
+        timestamp = hud_cp.ts_nanos["Lane_Departure_Warning_LS"]["LnKpAstDisbldIO"]
+        if timestamp >= newest_hud_timestamp:
+          newest_hud_timestamp = timestamp
+          lkas_hud_enabled = hud_cp.vl["Lane_Departure_Warning_LS"]["LnKpAstDisbldIO"] == 0
+
+    if lkas_hud_enabled is not None:
+      self.lkas_enabled = lkas_hud_enabled
+    elif self.lkas_button != 0 and prev_lkas_button == 0:
+      self.lkas_enabled = not self.lkas_enabled
+
+    ret.lkasEnabled = self.lkas_enabled
     ret.parkingBrake = pt_cp.vl["BCMGeneralPlatformStatus"]["ParkBrakeSwActive"] == 1
     ret.cruiseState.available = pt_cp.vl["ECMEngineStatus"]["CruiseMainOn"] != 0
     ret.espDisabled = pt_cp.vl["ESPStatus"]["TractionControlOn"] != 1
@@ -145,14 +173,18 @@ class CarState(CarStateBase):
       ret.leftBlindspot = pt_cp.vl["BCMBlindSpotMonitor"]["LeftBSM"] == 1
       ret.rightBlindspot = pt_cp.vl["BCMBlindSpotMonitor"]["RightBSM"] == 1
 
-    # Don't add event if transitioning from INIT, unless it's to an actual button
+    ret.buttonEvents = []
+    # Don't add a cruise event if transitioning from INIT, unless it is to an
+    # actual button. LKAS changes remain visible independently of cruise state.
     if self.cruise_buttons != CruiseButtons.UNPRESS or prev_cruise_buttons != CruiseButtons.INIT:
-      ret.buttonEvents = [
+      ret.buttonEvents += [
         *create_button_events(self.cruise_buttons, prev_cruise_buttons, BUTTONS_DICT,
                               unpressed_btn=CruiseButtons.UNPRESS),
         *create_button_events(self.distance_button, prev_distance_button,
                               {1: ButtonType.gapAdjustCruise})
       ]
+    ret.buttonEvents += create_button_events(int(self.lkas_enabled), int(prev_lkas_enabled),
+                                             {1: ButtonType.lkas})
 
     if ret.vEgo < self.CP.minSteerSpeed:
       ret.lowSpeedAlert = True
@@ -170,9 +202,18 @@ class CarState(CarStateBase):
     loopback_messages = [
       ("ASCMLKASteeringCmd", float('nan')),
     ]
+    # Optional state lookup: using NaN suppresses CAN-valid/timeout faults when
+    # this low-speed HUD message is not forwarded to a particular harness bus.
+    lkas_hud_messages = [
+      ("Lane_Departure_Warning_LS", float('nan')),
+    ]
 
     return {
       Bus.pt: CANParser(DBC[CP.carFingerprint][Bus.pt], pt_messages, 0),
       Bus.cam: CANParser(DBC[CP.carFingerprint][Bus.pt], [], 2),
       Bus.loopback: CANParser(DBC[CP.carFingerprint][Bus.pt], loopback_messages, 128),
+      Bus.body: CANParser('gm_global_a_lowspeed_1818125', lkas_hud_messages, 0),
+      Bus.adas: CANParser('gm_global_a_lowspeed_1818125', lkas_hud_messages, 1),
+      Bus.chassis: CANParser('gm_global_a_lowspeed_1818125', lkas_hud_messages, 2),
     }
+
