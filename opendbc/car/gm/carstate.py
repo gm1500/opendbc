@@ -173,18 +173,19 @@ class CarState(CarStateBase):
       ret.leftBlindspot = pt_cp.vl["BCMBlindSpotMonitor"]["LeftBSM"] == 1
       ret.rightBlindspot = pt_cp.vl["BCMBlindSpotMonitor"]["RightBSM"] == 1
 
-    ret.buttonEvents = []
+    button_events = []
     # Don't add a cruise event if transitioning from INIT, unless it is to an
     # actual button. LKAS changes remain visible independently of cruise state.
     if self.cruise_buttons != CruiseButtons.UNPRESS or prev_cruise_buttons != CruiseButtons.INIT:
-      ret.buttonEvents += [
+      button_events += [
         *create_button_events(self.cruise_buttons, prev_cruise_buttons, BUTTONS_DICT,
                               unpressed_btn=CruiseButtons.UNPRESS),
         *create_button_events(self.distance_button, prev_distance_button,
                               {1: ButtonType.gapAdjustCruise})
       ]
-    ret.buttonEvents += create_button_events(int(self.lkas_enabled), int(prev_lkas_enabled),
-                                             {1: ButtonType.lkas})
+    button_events += create_button_events(int(self.lkas_enabled), int(prev_lkas_enabled),
+                                          {1: ButtonType.lkas})
+    ret.buttonEvents = button_events
 
     if ret.vEgo < self.CP.minSteerSpeed:
       ret.lowSpeedAlert = True
@@ -216,4 +217,3 @@ class CarState(CarStateBase):
       Bus.adas: CANParser('gm_global_a_lowspeed_1818125', lkas_hud_messages, 1),
       Bus.chassis: CANParser('gm_global_a_lowspeed_1818125', lkas_hud_messages, 2),
     }
-
