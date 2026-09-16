@@ -205,6 +205,7 @@ struct CarState {
   blockPcmEnable @60 :Bool;  # whether to allow PCM to enable this frame
   carNotReady @61 :Bool;  # car is transiently refusing engagement, used to prevent a fault if engaged
   lkaButtonPressed @62 :Bool;  # raw OEM LKA button state; not a persistent setting
+  lkaButtonLatched @63 :Bool;  # carstate-rate session latch from raw momentary button
 
   # cruise state
   cruiseState @10 :CruiseState;
