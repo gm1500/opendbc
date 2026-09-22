@@ -6,7 +6,7 @@ from opendbc.car import Bus, DT_CTRL, structs, ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.gm.values import DBC, CanBus, CarControllerParams, CruiseButtons
+from opendbc.car.gm.values import CAR, DBC, CanBus, CarControllerParams, CruiseButtons
 from opendbc.car.interfaces import CarControllerBase
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -111,6 +111,11 @@ class CarController(CarControllerBase):
           if self.apply_brake > 0 or stopping:
             self.apply_gas = self.params.INACTIVE_TORQUE
           else:
+            if self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO:
+              # Trial an effective drag coefficient of 0.5 kg/m under propulsion.
+              # Blend from zero to 0.2 m/s^2; preserve coasting and brake conversion.
+              drag_blend = np.interp(accel, [0.0, 0.2], [0.0, 1.0])
+              torque += 0.2 * self.CP.wheelRadius * CS.out.vEgo ** 2 * drag_blend
             self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
 
         idx = (self.frame // 4) % 4
