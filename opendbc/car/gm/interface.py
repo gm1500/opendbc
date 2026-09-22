@@ -197,7 +197,7 @@ class CarInterface(CarInterfaceBase):
       if ret.openpilotLongitudinalControl:
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.37
-        ret.longitudinalActuatorDelay = 0.3
+        ret.longitudinalActuatorDelay = 0.5
         #ret.longitudinalTuning.kf = 1.05
         ret.longitudinalTuning.kiV = [0.05, 0.05]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
