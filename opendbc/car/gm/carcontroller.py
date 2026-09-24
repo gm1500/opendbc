@@ -105,11 +105,13 @@ class CarController(CarControllerBase):
           torque = self.accel_to_torque(accel, CS, 0)  # TODO: add pitch angle
           brake_accel = min((torque - self.params.BRAKE_THRESHOLD) / (self.CP.wheelRadius * self.CP.mass), 0)
 
-          self.apply_brake = int(round(np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)))
-          # Don't allow any gas above inactive regen while stopping
+          brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
+          low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
+          self.apply_brake = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
+          # Match the vehicle's braking torque request while braking or stopping.
           # FIXME: brakes aren't applied immediately when enabling at a stop
           if self.apply_brake > 0 or stopping:
-            self.apply_gas = self.params.INACTIVE_TORQUE
+            self.apply_gas = self.params.BRAKE_TORQUE
           else:
             self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
 

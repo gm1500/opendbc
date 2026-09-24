@@ -55,6 +55,17 @@ class CarControllerParams:
 
     self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, self.BRAKE_THRESHOLD]
     self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 0.]
+    self.BRAKE_LOOKUP_V_LOW_SPEED = self.BRAKE_LOOKUP_V
+    self.BRAKE_TORQUE = self.INACTIVE_TORQUE
+
+    if CP.carFingerprint == CAR.CHEVROLET_SILVERADO:
+      # Stock ACC uses -540 Nm during friction braking, -500 Nm when inactive.
+      self.BRAKE_TORQUE = self.MIN_TORQUE
+      # Stock final-stop samples need ~12 more command units for gentle braking.
+      # Preserve the origin and strong-braking scale; blend back above 2 m/s.
+      self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, -1., -0.5, -0.2, -0.1, 0.]
+      self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 100., 50., 20., 10., 0.]
+      self.BRAKE_LOOKUP_V_LOW_SPEED = [self.MAX_BRAKE, 100., 62., 32., 10., 0.]
 
 
 class GMSafetyFlags(IntFlag):
