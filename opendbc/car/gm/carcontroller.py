@@ -6,7 +6,7 @@ from opendbc.car import Bus, DT_CTRL, structs, ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.gm.values import DBC, CanBus, CarControllerParams, CruiseButtons
+from opendbc.car.gm.values import CAR, DBC, CanBus, CarControllerParams, CruiseButtons
 from opendbc.car.interfaces import CarControllerBase
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -17,6 +17,14 @@ LongCtrlState = structs.CarControl.Actuators.LongControlState
 CAMERA_CANCEL_DELAY_FRAMES = 10
 # Enforce a minimum interval between steering messages to avoid a fault
 MIN_STEER_MSG_INTERVAL_MS = 15
+
+
+def compensate_silverado_brake(brake_accel: float, v_ego: float) -> float:
+  # Route 26b showed weak gentle braking below 2 m/s. Start with a bounded
+  # correction: at most 25% or 0.10 m/s^2, fading out for standstill and cruise.
+  speed_weight = np.interp(v_ego, [0., 0.3, 1., 2.], [0., 1., 1., 0.])
+  correction = min(max(-brake_accel, 0.) * 0.25, 0.10)
+  return float(brake_accel - speed_weight * correction)
 
 
 class CarController(CarControllerBase):
@@ -104,6 +112,8 @@ class CarController(CarControllerBase):
           accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
           torque = self.accel_to_torque(accel, CS, 0)  # TODO: add pitch angle
           brake_accel = min((torque - self.params.BRAKE_THRESHOLD) / (self.CP.wheelRadius * self.CP.mass), 0)
+          if self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and not CS.out.standstill:
+            brake_accel = compensate_silverado_brake(brake_accel, CS.out.vEgo)
 
           self.apply_brake = int(round(np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)))
           # Don't allow any gas above inactive regen while stopping
