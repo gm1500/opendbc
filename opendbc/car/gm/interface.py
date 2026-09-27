@@ -198,8 +198,10 @@ class CarInterface(CarInterfaceBase):
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.37
         ret.longitudinalActuatorDelay = 0.3
-        #ret.longitudinalTuning.kf = 1.05
-        ret.longitudinalTuning.kiV = [0.05, 0.05]
+        # Unwind stale acceleration correction during the final approach.
+        # Keep the existing gain above 5 m/s and blend continuously below it.
+        ret.longitudinalTuning.kiBP = [2., 5.]
+        ret.longitudinalTuning.kiV = [0.2, 0.05]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.27
       ret.minSteerSpeed = -1

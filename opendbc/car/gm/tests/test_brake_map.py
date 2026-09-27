@@ -107,8 +107,65 @@ class TestBrakeMap(unittest.TestCase):
   def test_longitudinal_timing_and_gains(self):
     cp = self.params()
     self.assertAlmostEqual(cp.longitudinalActuatorDelay, .3)
-    np.testing.assert_allclose(cp.longitudinalTuning.kiV, [.05, .05])
+    gains = np.interp([0., 2., 3., 4., 5., 35.], cp.longitudinalTuning.kiBP, cp.longitudinalTuning.kiV)
+    np.testing.assert_allclose(gains, [.2, .2, .15, .1, .05, .05])
     self.assertAlmostEqual(cp.stopAccel, -.37)
+
+  def test_stock_acc_keeps_its_tuning(self):
+    cp = self.params(longitudinal=False)
+    self.assertFalse(cp.openpilotLongitudinalControl)
+    np.testing.assert_allclose(cp.longitudinalTuning.kiBP, [5., 35.])
+    np.testing.assert_allclose(cp.longitudinalTuning.kiV, [2., 1.5])
+
+  def test_small_brake_onset_hysteresis_and_can_output(self):
+    cp = self.params()
+    controller = CarController(DBC[cp.carFingerprint], cp)
+    cs = CarState(cp)
+    cs.out = structs.CarState(vEgo=10.)
+    cc = structs.CarControl(enabled=True, longActive=True)
+    cc.actuators.longControlState = 'pid'
+    # Cancel the existing drag feedforward so requests map to exact brake units.
+    drag = controller.params.DRAG_CONSTANT * cs.out.vEgo**2 / cp.mass
+    for requested, expected in [(0, 0), (1, 0), (0, 0), (1, 0), (2, 2), (1, 1),
+                                (0, 0), (1, 0), (100, 100), (1, 1), (0, 0)]:
+      with self.subTest(requested=requested, expected=expected):
+        controller.frame = 4
+        cc.actuators.accel = -requested / 100. - drag
+        output, messages = controller.update(cc.as_reader(), cs, 1_000_000_000)
+        can = {m[0]: m[1] for m in messages}
+        self.assertEqual(output.brake, expected)
+        self.assertEqual((-int.from_bytes(can[789][:2], 'big')) & 0xfff, expected)
+        self.assertEqual(can[789][0] >> 4, 0xa if expected else 1)
+        if expected:
+          self.assertEqual(output.gas, -540.)
+        else:
+          self.assertGreater(output.gas, -540.)
+
+  def test_small_brake_bypasses_at_low_speed_stopping_and_other_platforms(self):
+    cases = [(CAR.CHEVROLET_SILVERADO, 4.99, False), (CAR.CHEVROLET_SILVERADO, 10., True),
+             (CAR.CHEVROLET_BOLT_EUV, 10., False)]
+    for candidate, speed, stopping in cases:
+      cp = self.params(candidate)
+      p = CarControllerParams(cp)
+      accel = -.01 - p.DRAG_CONSTANT * speed**2 / cp.mass
+      with self.subTest(candidate=candidate, speed=speed, stopping=stopping):
+        output, _ = self.command(speed, accel, candidate=candidate, stopping=stopping)
+        self.assertEqual(output.brake, 1.)
+
+  def test_disengagement_clears_small_brake_hysteresis(self):
+    cp = self.params()
+    controller = CarController(DBC[cp.carFingerprint], cp)
+    cs = CarState(cp)
+    cs.out = structs.CarState(vEgo=10.)
+    cc = structs.CarControl(enabled=True, longActive=True)
+    cc.actuators.longControlState = 'pid'
+    drag = controller.params.DRAG_CONSTANT * cs.out.vEgo**2 / cp.mass
+    for active, request, expected in [(True, 2, 2), (False, 2, 0), (True, 1, 0)]:
+      controller.frame = 4
+      cc.longActive = active
+      cc.actuators.accel = -request / 100. - drag
+      output, _ = controller.update(cc.as_reader(), cs, 1_000_000_000)
+      self.assertEqual(output.brake, expected)
 
 
 if __name__ == '__main__':

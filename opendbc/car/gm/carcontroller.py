@@ -6,7 +6,7 @@ from opendbc.car import Bus, DT_CTRL, structs, ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.gm.values import DBC, CanBus, CarControllerParams, CruiseButtons
+from opendbc.car.gm.values import CAR, DBC, CanBus, CarControllerParams, CruiseButtons
 from opendbc.car.interfaces import CarControllerBase
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -107,7 +107,13 @@ class CarController(CarControllerBase):
 
           brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
           low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
-          self.apply_brake = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
+          brake_request = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
+          # Avoid repeatedly entering friction braking for a single command unit.
+          # Keep it once braking has started; larger requests pass immediately.
+          if (self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and CS.out.vEgo >= 5. and not stopping
+              and self.apply_brake == 0 and brake_request == 1):
+            brake_request = 0
+          self.apply_brake = brake_request
           # Match the vehicle's braking torque request while braking or stopping.
           # FIXME: brakes aren't applied immediately when enabling at a stop
           if self.apply_brake > 0 or stopping:
