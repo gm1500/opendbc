@@ -35,7 +35,12 @@ class CarControllerParams:
   def __init__(self, CP):
     # Gas/brake lookups
     self.MAX_BRAKE = 400  # ~ -4.0 m/s^2 with regen
-    self.DRAG_CONSTANT = 0.3  # should be reasonable for most GM cars
+    # Preserve the existing final-stop calibration when feedback is reset.
+    self.STOPPING_DRAG_FORCE_FACTOR = 0.3  # N / (m/s)^2
+    specs = CAR(CP.carFingerprint).config.specs
+    # Cd * frontal area is vehicle-specific; use nominal air density 1.225 kg/m^3.
+    self.DRAG_FORCE_FACTOR = 0.5 * 1.225 * specs.dragArea if specs.dragArea is not None else 0.3
+    self.ROLLING_RESISTANCE_COEFFICIENT = specs.rollingResistanceCoefficient
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
       self.MAX_TORQUE = 2450.0 #stock previous scale found 5404, new scaled comes to 3350
@@ -99,6 +104,8 @@ class GMCarDocs(CarDocs):
 class GMCarSpecs(CarSpecs):
   tireStiffnessFactor: float = 0.444  # not optimized yet
   wheelRadius: float = 0.32  # 17" wheels + 215/50R17 tires
+  dragArea: float | None = None  # Cd * frontal area, m^2; None keeps the legacy force factor
+  rollingResistanceCoefficient: float = 0.0  # dimensionless; zero keeps the legacy mapping
 
 
 @dataclass
@@ -177,7 +184,9 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.425),
+    # Initial road-load estimates from opendbc PR #951; require vehicle validation.
+    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.425,
+               dragArea=0.30 * 3.97, rollingResistanceCoefficient=0.008),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],

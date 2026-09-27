@@ -42,11 +42,14 @@ class CarController(CarControllerBase):
 
   def accel_to_torque(self, accel, CS, theta):
     """Converts desired linear acceleration into ACC torque."""
-    # tau = r * (F_linear + F_gravity + F_drag)
+    # tau = r * (F_linear + F_gravity + F_drag + F_rolling)
+    # Blend rolling resistance from rest to walking speed; do not add launch torque at rest.
+    rolling_force = (self.params.ROLLING_RESISTANCE_COEFFICIENT * self.CP.mass * ACCELERATION_DUE_TO_GRAVITY
+                     * np.clip(CS.out.vEgo, 0., 1.))
     return self.CP.wheelRadius * (
       self.CP.mass * accel +
       self.CP.mass * ACCELERATION_DUE_TO_GRAVITY * sin(theta) +
-      self.params.DRAG_CONSTANT * CS.out.vEgo ** 2
+      self.params.DRAG_FORCE_FACTOR * CS.out.vEgo ** 2 + rolling_force
     )
 
   def update(self, CC, CS, now_nanos):
@@ -103,6 +106,10 @@ class CarController(CarControllerBase):
         else:
           accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
           torque = self.accel_to_torque(accel, CS, 0)  # TODO: add pitch angle
+          if stopping:
+            # LongControl resets feedback here; retain the existing final-stop brake calibration.
+            torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
+          # Use the same force balance for gas and brakes to avoid a conflicting crossover.
           brake_accel = min((torque - self.params.BRAKE_THRESHOLD) / (self.CP.wheelRadius * self.CP.mass), 0)
 
           brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)

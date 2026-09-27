@@ -14,6 +14,13 @@ class TestBrakeMap(unittest.TestCase):
   def params(candidate=CAR.CHEVROLET_SILVERADO, longitudinal=True):
     return CarInterface.get_params(candidate, gen_empty_fingerprint(), [], longitudinal, False, False)
 
+  @staticmethod
+  def road_load_accel(cp, speed, stopping=False):
+    p = CarControllerParams(cp)
+    if stopping:
+      return p.STOPPING_DRAG_FORCE_FACTOR * speed**2 / cp.mass
+    return float(p.DRAG_FORCE_FACTOR * speed**2 / cp.mass + p.ROLLING_RESISTANCE_COEFFICIENT * 9.81 * np.clip(speed, 0., 1.))
+
   @classmethod
   def command(cls, speed, accel, *, candidate=CAR.CHEVROLET_SILVERADO, active=True, enabled=True,
               standstill=False, stopping=False, longitudinal=True):
@@ -29,9 +36,11 @@ class TestBrakeMap(unittest.TestCase):
     return output, {m[0]: m[1] for m in messages}
 
   def test_brake_commands_and_can_encoding(self):
-    for accel, expected in [(-.05, 5), (-.1, 10), (-.2, 32), (-.37, 49), (-.5, 62), (-1., 100), (-4., 400)]:
+    # Isolate the brake lookup/encoding from the moving road-load estimate.
+    extra_load = self.road_load_accel(self.params(), 1.) - .3 / self.params().mass
+    for accel, expected in [(-.05, 5), (-.1, 10), (-.2, 32), (-.37, 49), (-.5, 62), (-1., 100)]:
       with self.subTest(accel=accel):
-        output, can = self.command(1., accel)
+        output, can = self.command(1., accel - extra_load)
         self.assertEqual(output.brake, expected)
         self.assertEqual(output.gas, -540.)
         self.assertEqual((-int.from_bytes(can[789][:2], 'big')) & 0xfff, expected)
@@ -44,7 +53,7 @@ class TestBrakeMap(unittest.TestCase):
     p = CarControllerParams(cp)
     requests = np.linspace(-5., 2., 1401)
     for speed in [0., .1, 1., 2., 3., 4., 40.]:
-      accel = np.clip(requests, p.ACCEL_MIN, p.ACCEL_MAX) + p.DRAG_CONSTANT * speed**2 / cp.mass
+      accel = np.clip(requests, p.ACCEL_MIN, p.ACCEL_MAX) + self.road_load_accel(cp, speed)
       normal = np.interp(accel, p.BRAKE_LOOKUP_BP, p.BRAKE_LOOKUP_V)
       slow = np.interp(accel, p.BRAKE_LOOKUP_BP, p.BRAKE_LOOKUP_V_LOW_SPEED)
       brake = normal + np.interp(speed, [2., 4.], [1., 0.]) * (slow - normal)
@@ -67,14 +76,16 @@ class TestBrakeMap(unittest.TestCase):
       before, _ = self.command(1., accel - 1e-6)
       after, _ = self.command(1., accel + 1e-6)
       self.assertLessEqual(abs(after.brake - before.brake), 1.)
-    self.assertEqual(self.command(3., -.37)[0].brake, 43.)
+    self.assertEqual(self.command(3., -.37, stopping=True)[0].brake, 43.)
 
-  def test_high_speed_and_strong_braking_keep_existing_scale(self):
+  def test_moving_force_balance_and_strong_braking_scale(self):
     cp = self.params()
     for speed in [4., 40 / 3.6, 60 / 3.6, 30.]:
       for accel in [-.05, -.2, -.5, -1., -4.]:
         output, _ = self.command(speed, accel)
-        expected = round(np.clip(-100 * (accel + .3 * speed**2 / cp.mass), 0, 400))
+        expected = round(np.clip(-100 * (accel + self.road_load_accel(cp, speed)), 0, 400))
+        if speed >= 5. and expected == 1:
+          expected = 0
         self.assertEqual(output.brake, expected)
     for accel in [-1.1, -2., -4., -5.]:
       self.assertEqual(self.command(0., accel)[0].brake, min(round(-100 * accel), 400))
@@ -125,7 +136,7 @@ class TestBrakeMap(unittest.TestCase):
     cc = structs.CarControl(enabled=True, longActive=True)
     cc.actuators.longControlState = 'pid'
     # Cancel the existing drag feedforward so requests map to exact brake units.
-    drag = controller.params.DRAG_CONSTANT * cs.out.vEgo**2 / cp.mass
+    drag = self.road_load_accel(cp, cs.out.vEgo)
     for requested, expected in [(0, 0), (1, 0), (0, 0), (1, 0), (2, 2), (1, 1),
                                 (0, 0), (1, 0), (100, 100), (1, 1), (0, 0)]:
       with self.subTest(requested=requested, expected=expected):
@@ -146,8 +157,7 @@ class TestBrakeMap(unittest.TestCase):
              (CAR.CHEVROLET_BOLT_EUV, 10., False)]
     for candidate, speed, stopping in cases:
       cp = self.params(candidate)
-      p = CarControllerParams(cp)
-      accel = -.01 - p.DRAG_CONSTANT * speed**2 / cp.mass
+      accel = -.01 - self.road_load_accel(cp, speed, stopping)
       with self.subTest(candidate=candidate, speed=speed, stopping=stopping):
         output, _ = self.command(speed, accel, candidate=candidate, stopping=stopping)
         self.assertEqual(output.brake, 1.)
@@ -159,7 +169,7 @@ class TestBrakeMap(unittest.TestCase):
     cs.out = structs.CarState(vEgo=10.)
     cc = structs.CarControl(enabled=True, longActive=True)
     cc.actuators.longControlState = 'pid'
-    drag = controller.params.DRAG_CONSTANT * cs.out.vEgo**2 / cp.mass
+    drag = self.road_load_accel(cp, cs.out.vEgo)
     for active, request, expected in [(True, 2, 2), (False, 2, 0), (True, 1, 0)]:
       controller.frame = 4
       cc.longActive = active
