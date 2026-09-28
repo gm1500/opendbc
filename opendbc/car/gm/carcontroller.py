@@ -46,10 +46,13 @@ class CarController(CarControllerBase):
     # Blend rolling resistance from rest to walking speed; do not add launch torque at rest.
     rolling_force = (self.params.ROLLING_RESISTANCE_COEFFICIENT * self.CP.mass * ACCELERATION_DUE_TO_GRAVITY
                      * np.clip(CS.out.vEgo, 0., 1.))
+    road_load_force = self.params.ROAD_LOAD_SCALE * (
+      self.params.DRAG_FORCE_FACTOR * CS.out.vEgo ** 2 + rolling_force
+    )
     return self.CP.wheelRadius * (
       self.CP.mass * accel +
       self.CP.mass * ACCELERATION_DUE_TO_GRAVITY * sin(theta) +
-      self.params.DRAG_FORCE_FACTOR * CS.out.vEgo ** 2 + rolling_force
+      road_load_force
     )
 
   def update(self, CC, CS, now_nanos):
