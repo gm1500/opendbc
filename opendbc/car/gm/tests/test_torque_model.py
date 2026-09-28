@@ -23,11 +23,11 @@ class TestTorqueModel(unittest.TestCase):
   def test_sierra_road_load_across_speeds(self):
     controller = self.controller()
     self.assertAlmostEqual(controller.CP.mass, 2586.)
-    self.assertAlmostEqual(controller.CP.wheelRadius, .425)
-    # Independent force balance: Cd=.30, area=3.97 m^2, rho=1.225, effective Crr=.004.
+    self.assertAlmostEqual(controller.CP.wheelRadius, .419)
+    # Independent force balance: Cd=.30, area=3.61 m^2, rho=1.225, effective Crr=.004.
     for kph in [10., 30., 60., 90., 120.]:
       speed = kph / 3.6
-      expected = .425 * (.5 * 1.225 * .30 * 3.97 * speed**2 + .004 * 2586. * 9.81)
+      expected = .419 * (.5 * 1.225 * .30 * 3.61 * speed**2 + .004 * 2586. * 9.81)
       with self.subTest(kph=kph):
         self.assertAlmostEqual(self.torque(controller, speed), expected, places=4)
 
@@ -38,7 +38,7 @@ class TestTorqueModel(unittest.TestCase):
       with self.subTest(candidate=candidate):
         self.assertEqual(p.STOPPING_DRAG_FORCE_FACTOR, .3)
         if candidate == CAR.CHEVROLET_SILVERADO:
-          self.assertAlmostEqual(p.DRAG_FORCE_FACTOR, .7294875)
+          self.assertAlmostEqual(p.DRAG_FORCE_FACTOR, .6633375)
           self.assertEqual(p.ROLLING_RESISTANCE_COEFFICIENT, .004)
         else:
           self.assertEqual(p.DRAG_FORCE_FACTOR, .3)
