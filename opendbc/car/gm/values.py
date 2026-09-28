@@ -41,6 +41,7 @@ class CarControllerParams:
     # Cd * frontal area is vehicle-specific; use nominal air density 1.225 kg/m^3.
     self.DRAG_FORCE_FACTOR = 0.5 * 1.225 * specs.dragArea if specs.dragArea is not None else 0.3
     self.ROLLING_RESISTANCE_COEFFICIENT = specs.rollingResistanceCoefficient
+    self.ROAD_LOAD_SCALE = specs.roadLoadScale
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
       self.MAX_TORQUE = 2450.0 #stock previous scale found 5404, new scaled comes to 3350
@@ -106,6 +107,7 @@ class GMCarSpecs(CarSpecs):
   wheelRadius: float = 0.32  # 17" wheels + 215/50R17 tires
   dragArea: float | None = None  # Cd * frontal area, m^2; None keeps the legacy force factor
   rollingResistanceCoefficient: float = 0.0  # dimensionless; zero keeps the legacy mapping
+  roadLoadScale: float = 1.0  # scales only aero + rolling feedforward
 
 
 @dataclass
@@ -185,9 +187,9 @@ class CAR(Platforms):
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
     # Vehicle-profile dimensions use the confirmed 275/60R20 nominal radius and revised frontal-area estimate.
-    # Cd remains the existing effective ACC calibration; rolling feedforward remains at the route-checked 0.004 value.
+    # Cd and Crr remain unchanged; reduce only the modeled aero + rolling feedforward for this experiment.
     GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.419,
-               dragArea=0.30 * 3.61, rollingResistanceCoefficient=0.004),
+               dragArea=0.30 * 3.61, rollingResistanceCoefficient=0.004, roadLoadScale=0.75),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
