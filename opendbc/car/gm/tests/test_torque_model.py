@@ -24,10 +24,10 @@ class TestTorqueModel(unittest.TestCase):
     controller = self.controller()
     self.assertAlmostEqual(controller.CP.mass, 2586.)
     self.assertAlmostEqual(controller.CP.wheelRadius, .419)
-    # Independent force balance: Cd=.30, area=3.61 m^2, rho=1.225, effective Crr=.004.
+    # Independent force balance: Cd=.30, area=3.61 m^2, rho=1.225, effective Crr=.004, road-load scale=.75.
     for kph in [10., 30., 60., 90., 120.]:
       speed = kph / 3.6
-      expected = .419 * (.5 * 1.225 * .30 * 3.61 * speed**2 + .004 * 2586. * 9.81)
+      expected = .419 * .75 * (.5 * 1.225 * .30 * 3.61 * speed**2 + .004 * 2586. * 9.81)
       with self.subTest(kph=kph):
         self.assertAlmostEqual(self.torque(controller, speed), expected, places=4)
 
@@ -40,9 +40,11 @@ class TestTorqueModel(unittest.TestCase):
         if candidate == CAR.CHEVROLET_SILVERADO:
           self.assertAlmostEqual(p.DRAG_FORCE_FACTOR, .6633375)
           self.assertEqual(p.ROLLING_RESISTANCE_COEFFICIENT, .004)
+          self.assertEqual(p.ROAD_LOAD_SCALE, .75)
         else:
           self.assertEqual(p.DRAG_FORCE_FACTOR, .3)
           self.assertEqual(p.ROLLING_RESISTANCE_COEFFICIENT, 0.)
+          self.assertEqual(p.ROAD_LOAD_SCALE, 1.)
           for speed in [0., .2, 1., 15., 35.]:
             for accel in [-4., -.1, 0., .5, 2.]:
               expected = controller.CP.wheelRadius * (controller.CP.mass * accel + .3 * speed**2)
