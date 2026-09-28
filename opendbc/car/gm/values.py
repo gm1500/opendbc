@@ -187,9 +187,9 @@ class CAR(Platforms):
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
     # Vehicle-profile dimensions use the confirmed 275/60R20 nominal radius and revised frontal-area estimate.
-    # Cd and Crr remain unchanged; reduce only the modeled aero + rolling feedforward for this experiment.
+    # Keep the full modeled aero + rolling feedforward; the 0.75 experiment did not improve speed holding.
     GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.419,
-               dragArea=0.30 * 3.61, rollingResistanceCoefficient=0.004, roadLoadScale=0.75),
+               dragArea=0.30 * 3.61, rollingResistanceCoefficient=0.004),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
