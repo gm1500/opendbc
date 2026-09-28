@@ -184,9 +184,10 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    # Initial road-load estimates from opendbc PR #951; require vehicle validation.
+    # Keep PR #951 drag area; reduce provisional rolling feedforward after route-response checks.
+    # This is an effective ACC calibration, not a measured tire rolling-resistance coefficient.
     GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.425,
-               dragArea=0.30 * 3.97, rollingResistanceCoefficient=0.008),
+               dragArea=0.30 * 3.97, rollingResistanceCoefficient=0.004),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
