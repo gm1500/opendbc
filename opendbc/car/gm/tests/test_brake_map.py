@@ -118,8 +118,9 @@ class TestBrakeMap(unittest.TestCase):
   def test_longitudinal_timing_and_gains(self):
     cp = self.params()
     self.assertAlmostEqual(cp.longitudinalActuatorDelay, .3)
-    gains = np.interp([0., 2., 3., 4., 5., 35.], cp.longitudinalTuning.kiBP, cp.longitudinalTuning.kiV)
-    np.testing.assert_allclose(gains, [.2, .2, .15, .1, .05, .05])
+    gains = np.interp([0., 2., 3., 4., 5., 7.5, 10., 15., 20., 25., 35.],
+                      cp.longitudinalTuning.kiBP, cp.longitudinalTuning.kiV)
+    np.testing.assert_allclose(gains, [.2, .2, .15, .1, .05, .0375, .025, .025, .0875, .15, .15])
     self.assertAlmostEqual(cp.stopAccel, -.37)
 
   def test_stock_acc_keeps_its_tuning(self):
