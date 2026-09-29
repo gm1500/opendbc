@@ -197,11 +197,11 @@ class CarInterface(CarInterfaceBase):
       if ret.openpilotLongitudinalControl:
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.37
-        ret.longitudinalActuatorDelay = 0.3
-        # Preserve approach feedback through 5 m/s. Use gentler correction at
-        # city speeds and faster load-bias tracking at highway speeds.
+        ret.longitudinalActuatorDelay = 0.5
+        # Preserve strong final-approach feedback, then rapidly reduce integral
+        # authority with speed to avoid carrying acceleration bias through set speed.
         ret.longitudinalTuning.kiBP = [2., 5., 10., 15., 25.]
-        ret.longitudinalTuning.kiV = [0.2, 0.05, 0.025, 0.025, 0.15]
+        ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.005, 0.0025]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.27
       ret.minSteerSpeed = -1
