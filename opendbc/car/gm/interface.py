@@ -201,8 +201,8 @@ class CarInterface(CarInterfaceBase):
         ret.longitudinalActuatorDelay = 0.5
         # Preserve strong final-approach feedback, then rapidly reduce integral
         # authority with speed to avoid carrying acceleration bias through set speed.
-        ret.longitudinalTuning.kiBP = [2., 5., 10., 15., 25.]
-        ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.005, 0.0025]
+        ret.longitudinalTuning.kiBP = [2., 5., 10., 40. * CV.KPH_TO_MS, 15., 25.]
+        ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.00375, 0.00375, 0.001875]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.27
       ret.minSteerSpeed = -1
