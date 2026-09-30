@@ -38,7 +38,7 @@ class CarControllerParams:
     self.DRAG_CONSTANT = 0.3  # should be reasonable for most GM cars
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
-      self.MAX_TORQUE = 2450.0 #stock previous scale found 5404, new scaled comes to 3350
+      self.MAX_TORQUE = 2450.0
       self.MIN_TORQUE = -540.0
       self.INACTIVE_TORQUE = -500.0
       # Camera ACC vehicles have no regen while enabled.
@@ -61,6 +61,11 @@ class GMSafetyFlags(IntFlag):
   HW_CAM = 1
   HW_CAM_LONG = 2
   EV = 4
+
+
+class GMFlags(IntFlag):
+  # Detected flags
+  HAS_BSM = 1  # blind spot monitoring
 
 
 class Footnote(Enum):
