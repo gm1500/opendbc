@@ -127,7 +127,12 @@ class CarController(CarControllerBase):
           if self.apply_brake > 0 or stopping:
             self.apply_gas = self.params.BRAKE_TORQUE
           else:
-            self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
+            torque = np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)
+            if self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and torque > 0.:
+              # Cruise propulsion POC: blend to 10% less positive torque at 40 km/h.
+              # Apply after brake selection so braking and stopping retain their calibration.
+              torque *= np.interp(CS.out.vEgo, [30. * CV.KPH_TO_MS, 40. * CV.KPH_TO_MS], [1., 0.9])
+            self.apply_gas = int(round(torque))
 
         idx = (self.frame // 4) % 4
 
