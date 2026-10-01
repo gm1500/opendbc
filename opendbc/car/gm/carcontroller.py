@@ -18,6 +18,11 @@ CAMERA_CANCEL_DELAY_FRAMES = 10
 # Enforce a minimum interval between steering messages to avoid a fault
 MIN_STEER_MSG_INTERVAL_MS = 15
 
+# Sierra-only POC. A calibrated vehicle-frame pitch is a grade proxy, not a
+# surveyed road angle; bound and filter its contribution before using it.
+GRADE_ACCEL_MAX = 0.75  # m/s^2, approximately 7.7% grade
+GRADE_FILTER_TIME_CONSTANT = 1.0  # s
+
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP):
@@ -26,6 +31,7 @@ class CarController(CarControllerBase):
     self.apply_torque_last = 0
     self.apply_gas = 0
     self.apply_brake = 0
+    self.grade_accel = 0.
     self.last_steer_frame = 0
     self.last_button_frame = 0
     self.cancel_counter = 0
@@ -53,7 +59,23 @@ class CarController(CarControllerBase):
       road_load_force
     )
 
+  def grade_angle(self, CC, CS):
+    if self.CP.carFingerprint != CAR.CHEVROLET_SILVERADO:
+      return 0.
+
+    valid_pitch = len(CC.orientationNED) == 3 and np.isfinite(CC.orientationNED[1])
+    target_grade = np.clip(ACCELERATION_DUE_TO_GRAVITY * sin(CC.orientationNED[1]),
+                           -GRADE_ACCEL_MAX, GRADE_ACCEL_MAX) if valid_pitch else 0.
+    self.grade_accel += DT_CTRL / (GRADE_FILTER_TIME_CONSTANT + DT_CTRL) * (target_grade - self.grade_accel)
+
+    if not (valid_pitch and CC.longActive and CC.actuators.longControlState == LongCtrlState.pid):
+      return 0.
+    # Keep the existing low-speed calibration, and avoid a step at its boundary.
+    speed_gain = np.interp(CS.out.vEgo, [5., 8.], [0., 1.])
+    return float(np.arcsin(self.grade_accel * speed_gain / ACCELERATION_DUE_TO_GRAVITY))
+
   def update(self, CC, CS, now_nanos):
+    theta = self.grade_angle(CC, CS)
     actuators = CC.actuators
     hud_control = CC.hudControl
     hud_alert = hud_control.visualAlert
@@ -106,7 +128,7 @@ class CarController(CarControllerBase):
           self.apply_brake = 0
         else:
           accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
-          torque = self.accel_to_torque(accel, CS, 0)  # TODO: add pitch angle
+          torque = self.accel_to_torque(accel, CS, theta)
           if stopping:
             # LongControl resets feedback here; retain the existing final-stop brake calibration.
             torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
