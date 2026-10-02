@@ -111,7 +111,15 @@ class CarController(CarControllerBase):
             # LongControl resets feedback here; retain the existing final-stop brake calibration.
             torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
           # Use the same force balance for gas and brakes to avoid a conflicting crossover.
-          brake_accel = min((torque - self.params.BRAKE_THRESHOLD) / (self.CP.wheelRadius * self.CP.mass), 0)
+          brake_threshold = self.params.BRAKE_THRESHOLD
+          if self.params.COAST_TORQUE_OFFSET and not stopping:
+            # Allow mild coasting above 18 km/h, with the full allowance at 40 km/h.
+            # Restore the original crossover as modeled friction demand rises to 0.3 m/s^2.
+            speed_weight = np.interp(CS.out.vEgo, [5., 40. * CV.KPH_TO_MS], [0., 1.])
+            friction_demand = max((brake_threshold - torque) / (self.CP.wheelRadius * self.CP.mass), 0.)
+            brake_weight = np.interp(friction_demand, [0.1, 0.3], [1., 0.])
+            brake_threshold -= self.params.COAST_TORQUE_OFFSET * speed_weight * brake_weight
+          brake_accel = min((torque - brake_threshold) / (self.CP.wheelRadius * self.CP.mass), 0)
 
           brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
           low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
