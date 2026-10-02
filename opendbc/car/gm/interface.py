@@ -199,10 +199,10 @@ class CarInterface(CarInterfaceBase):
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.37
         ret.longitudinalActuatorDelay = 0.5
-        # Preserve strong final-approach feedback, then rapidly reduce integral
-        # authority with speed to avoid carrying acceleration bias through set speed.
-        ret.longitudinalTuning.kiBP = [2., 5., 10., 40. * CV.KPH_TO_MS, 15., 25.]
-        ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.00375, 0.00375, 0.001875]
+        # City-speed Ki POC: test stronger acceleration-error correction at 40-60 km/h.
+        # Preserve gains through 36 km/h and blend back to the highway gain at 90 km/h.
+        ret.longitudinalTuning.kiBP = [2., 5., 10., 40. * CV.KPH_TO_MS, 60. * CV.KPH_TO_MS, 25.]
+        ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.05, 0.05, 0.001875]
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.27
       ret.minSteerSpeed = -1
