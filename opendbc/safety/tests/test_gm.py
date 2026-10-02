@@ -212,7 +212,7 @@ class TestGmCameraLongitudinalSafety(GmLongitudinalBase, TestGmCameraSafetyBase)
   RELAY_MALFUNCTION_ADDRS = {0: (0x180, 0x2CB, 0x370, 0x315), 2: (0x184,)}
   BUTTONS_BUS = 0  # rx only
 
-  MAX_GAS = 2450  # This fork's existing GM_CAM_LONG_LIMITS cap.
+  MAX_GAS = 1346
   MIN_GAS = -540  # maximum regen
   INACTIVE_GAS = -500
 

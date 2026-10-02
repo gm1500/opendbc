@@ -1,8 +1,6 @@
-from math import sin
-
 import numpy as np
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, structs, ACCELERATION_DUE_TO_GRAVITY
+from opendbc.car import Bus, DT_CTRL, structs
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
@@ -39,19 +37,6 @@ class CarController(CarControllerBase):
     self.packer_pt = CANPacker(DBC[self.CP.carFingerprint][Bus.pt])
     self.packer_obj = CANPacker(DBC[self.CP.carFingerprint][Bus.radar])
     self.packer_ch = CANPacker(DBC[self.CP.carFingerprint][Bus.chassis])
-
-  def accel_to_torque(self, accel, CS, theta):
-    """Converts desired linear acceleration into ACC torque."""
-    # tau = r * (F_linear + F_gravity + F_drag + F_rolling)
-    # Blend rolling resistance from rest to walking speed; do not add launch torque at rest.
-    rolling_force = (self.params.ROLLING_RESISTANCE_COEFFICIENT * self.CP.mass * ACCELERATION_DUE_TO_GRAVITY
-                     * np.clip(CS.out.vEgo, 0., 1.))
-    road_load_force = self.params.DRAG_FORCE_FACTOR * CS.out.vEgo ** 2 + rolling_force
-    return self.CP.wheelRadius * (
-      self.CP.mass * accel +
-      self.CP.mass * ACCELERATION_DUE_TO_GRAVITY * sin(theta) +
-      road_load_force
-    )
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -102,19 +87,15 @@ class CarController(CarControllerBase):
         stopping = actuators.longControlState == LongCtrlState.stopping
         if not CC.longActive:
           # ASCM sends max regen when not enabled
-          self.apply_gas = self.params.INACTIVE_TORQUE
+          self.apply_gas = self.params.INACTIVE_REGEN
           self.apply_brake = 0
         else:
           accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
-          torque = self.accel_to_torque(accel, CS, 0)  # TODO: add pitch angle
-          if stopping:
-            # LongControl resets feedback here; retain the existing final-stop brake calibration.
-            torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
-          # Use the same force balance for gas and brakes to avoid a conflicting crossover.
-          brake_accel = min((torque - self.params.BRAKE_THRESHOLD) / (self.CP.wheelRadius * self.CP.mass), 0)
+          # Upstream acceleration-to-command lookup; no vehicle-force compensation.
+          self.apply_gas = float(np.interp(accel, self.params.GAS_LOOKUP_BP, self.params.GAS_LOOKUP_V))
 
-          brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
-          low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
+          brake = np.interp(accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
+          low_speed_brake = np.interp(accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
           brake_request = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
           # Avoid repeatedly entering friction braking for a single command unit.
           # Keep it once braking has started; larger requests pass immediately.
@@ -122,12 +103,11 @@ class CarController(CarControllerBase):
               and self.apply_brake == 0 and brake_request == 1):
             brake_request = 0
           self.apply_brake = brake_request
-          # Match the vehicle's braking torque request while braking or stopping.
+          # Keep -540 while braking/stopping on Sierra; inactive remains -500.
+          # Other GM platforms retain upstream stopping-command behavior.
           # FIXME: brakes aren't applied immediately when enabling at a stop
-          if self.apply_brake > 0 or stopping:
-            self.apply_gas = self.params.BRAKE_TORQUE
-          else:
-            self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
+          if stopping or (self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and self.apply_brake > 0):
+            self.apply_gas = self.params.BRAKE_REGEN
 
         idx = (self.frame // 4) % 4
 
