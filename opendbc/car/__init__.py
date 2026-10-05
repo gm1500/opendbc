@@ -154,6 +154,7 @@ class CarSpecs:
   minSteerSpeed: float = 0.0  # m/s
   minEnableSpeed: float = -1.0  # m/s
   tireStiffnessFactor: float = 1.0
+  wheelRadius: float = 0.0  # m; platforms using wheel torque provide their own radius
 
   def override(self, **kwargs):
     return replace(self, **kwargs)

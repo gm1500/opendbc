@@ -1,10 +1,10 @@
 import numpy as np
 from opendbc.can import CANPacker
-from opendbc.car import Bus, DT_CTRL, structs
+from opendbc.car import Bus, DT_CTRL, structs, ACCELERATION_DUE_TO_GRAVITY
 from opendbc.car.lateral import apply_driver_steer_torque_limits
 from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.gm.values import DBC, CanBus, CarControllerParams, CruiseButtons
+from opendbc.car.gm.values import CAR, DBC, CanBus, CarControllerParams, CruiseButtons
 from opendbc.car.interfaces import CarControllerBase
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
@@ -29,6 +29,7 @@ class CarController(CarControllerBase):
     self.cancel_counter = 0
 
     self.lka_steering_cmd_counter = 0
+    self.lka_steering_cmd_counter_initialized = False
     self.lka_icon_status_last = (False, False)
 
     self.params = CarControllerParams(self.CP)
@@ -36,6 +37,15 @@ class CarController(CarControllerBase):
     self.packer_pt = CANPacker(DBC[self.CP.carFingerprint][Bus.pt])
     self.packer_obj = CANPacker(DBC[self.CP.carFingerprint][Bus.radar])
     self.packer_ch = CANPacker(DBC[self.CP.carFingerprint][Bus.chassis])
+
+  def accel_to_torque(self, accel, CS):
+    """Converts desired linear acceleration into ACC torque."""
+    # tau = r * (F_linear + F_drag + F_rolling)
+    # Blend rolling resistance from rest to walking speed; do not add launch torque at rest.
+    rolling_force = (self.params.ROLLING_RESISTANCE_COEFFICIENT * self.CP.mass * ACCELERATION_DUE_TO_GRAVITY
+                     * np.clip(CS.out.vEgo, 0., 1.))
+    road_load_force = self.params.DRAG_FORCE_FACTOR * CS.out.vEgo ** 2 + rolling_force
+    return self.CP.wheelRadius * (self.CP.mass * accel + road_load_force)
 
   def update(self, CC, CS, now_nanos):
     actuators = CC.actuators
@@ -60,16 +70,14 @@ class CarController(CarControllerBase):
       if CS.loopback_lka_steering_cmd_ts_nanos == 0 or out_of_sync:
         steer_step = self.params.STEER_STEP
 
-    self.lka_steering_cmd_counter += 1 if CS.loopback_lka_steering_cmd_updated else 0
-
     # Avoid GM EPS faults when transmitting messages too close together: skip this transmit if we
     # received the ASCMLKASteeringCmd loopback confirmation too recently
     last_lka_steer_msg_ms = (now_nanos - CS.loopback_lka_steering_cmd_ts_nanos) * 1e-6
     if (self.frame - self.last_steer_frame) >= steer_step and last_lka_steer_msg_ms > MIN_STEER_MSG_INTERVAL_MS:
       # Initialize ASCMLKASteeringCmd counter using the camera until we get a msg on the bus
-      if CS.loopback_lka_steering_cmd_ts_nanos == 0:
-        self.lka_steering_cmd_counter = CS.pt_lka_steering_cmd_counter + 1
-
+      if not self.lka_steering_cmd_counter_initialized:
+        self.lka_steering_cmd_counter = (CS.pt_lka_steering_cmd_counter + 1) % 4
+        self.lka_steering_cmd_counter_initialized = True
       if CC.latActive:
         new_torque = int(round(actuators.torque * self.params.STEER_MAX))
         apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.params)
@@ -80,6 +88,7 @@ class CarController(CarControllerBase):
       self.apply_torque_last = apply_torque
       idx = self.lka_steering_cmd_counter % 4
       can_sends.append(gmcan.create_steering_control(self.packer_pt, CanBus.POWERTRAIN, apply_torque, idx, CC.latActive))
+      self.lka_steering_cmd_counter = (idx + 1) % 4
 
     if self.CP.openpilotLongitudinalControl:
       # Gas/regen, brakes, and UI commands - all at 25Hz
@@ -87,15 +96,40 @@ class CarController(CarControllerBase):
         stopping = actuators.longControlState == LongCtrlState.stopping
         if not CC.longActive:
           # ASCM sends max regen when not enabled
-          self.apply_gas = self.params.INACTIVE_REGEN
+          self.apply_gas = self.params.INACTIVE_TORQUE
           self.apply_brake = 0
         else:
-          self.apply_gas = float(np.interp(actuators.accel, self.params.GAS_LOOKUP_BP, self.params.GAS_LOOKUP_V))
-          self.apply_brake = int(round(np.interp(actuators.accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)))
-          # Don't allow any gas above inactive regen while stopping
-          # FIXME: brakes aren't applied immediately when enabling at a stop
+          accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
+          torque = self.accel_to_torque(accel, CS)
           if stopping:
-            self.apply_gas = self.params.INACTIVE_REGEN
+            # LongControl resets feedback here; retain the existing final-stop brake calibration.
+            torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
+          # Use the same force balance for gas and brakes to avoid a conflicting crossover.
+          brake_threshold = self.params.BRAKE_THRESHOLD
+          if self.params.COAST_TORQUE_OFFSET and not stopping:
+            # Allow mild coasting above 18 km/h, with the full allowance at 40 km/h.
+            # Restore the original crossover as modeled friction demand rises to 0.3 m/s^2.
+            speed_weight = np.interp(CS.out.vEgo, [5., 40. * CV.KPH_TO_MS], [0., 1.])
+            friction_demand = max((brake_threshold - torque) / (self.CP.wheelRadius * self.CP.mass), 0.)
+            brake_weight = np.interp(friction_demand, [0.1, 0.3], [1., 0.])
+            brake_threshold -= self.params.COAST_TORQUE_OFFSET * speed_weight * brake_weight
+          brake_accel = min((torque - brake_threshold) / (self.CP.wheelRadius * self.CP.mass), 0)
+
+          brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
+          low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
+          brake_request = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
+          # Avoid repeatedly entering friction braking for a single command unit.
+          # Keep it once braking has started; larger requests pass immediately.
+          if (self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and CS.out.vEgo >= 5. and not stopping
+              and self.apply_brake == 0 and brake_request == 1):
+            brake_request = 0
+          self.apply_brake = brake_request
+          # Match the vehicle's braking torque request while braking or stopping.
+          # FIXME: brakes aren't applied immediately when enabling at a stop
+          if self.apply_brake > 0 or stopping:
+            self.apply_gas = self.params.BRAKE_TORQUE
+          else:
+            self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
 
         idx = (self.frame // 4) % 4
 

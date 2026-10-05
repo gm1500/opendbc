@@ -35,28 +35,44 @@ class CarControllerParams:
   def __init__(self, CP):
     # Gas/brake lookups
     self.MAX_BRAKE = 400  # ~ -4.0 m/s^2 with regen
+    # Preserve the existing final-stop calibration when feedback is reset.
+    self.STOPPING_DRAG_FORCE_FACTOR = 0.3  # N / (m/s)^2
+    specs = CAR(CP.carFingerprint).config.specs
+    # Cd * frontal area is vehicle-specific; use nominal air density 1.225 kg/m^3.
+    self.DRAG_FORCE_FACTOR = 0.5 * 1.225 * specs.dragArea if specs.dragArea is not None else 0.3
+    self.ROLLING_RESISTANCE_COEFFICIENT = specs.rollingResistanceCoefficient
 
     if CP.carFingerprint in (CAMERA_ACC_CAR | SDGM_CAR):
-      self.MAX_GAS = 1346.0
-      self.MAX_ACC_REGEN = -540.0
-      self.INACTIVE_REGEN = -500.0
+      self.MAX_TORQUE = 2450.0
+      self.MIN_TORQUE = -540.0
+      self.INACTIVE_TORQUE = -500.0
       # Camera ACC vehicles have no regen while enabled.
-      # Camera transitions to MAX_ACC_REGEN from zero gas and uses friction brakes instantly
-      max_regen_acceleration = 0.
+      # Camera transitions to minimum torque from zero gas and uses friction brakes instantly.
+      self.BRAKE_THRESHOLD = 0.
 
     else:
-      self.MAX_GAS = 1018.0  # Safety limit, not ACC max. Stock ACC >2042 from standstill.
-      self.MAX_ACC_REGEN = -650.0  # Max ACC regen is slightly less than max paddle regen
-      self.INACTIVE_REGEN = -650.0
+      self.MAX_TORQUE = 1018.0  # Safety limit, not ACC max. Stock ACC >2042 from standstill.
+      self.MIN_TORQUE = -650.0  # Max ACC regen is slightly less than max paddle regen
+      self.INACTIVE_TORQUE = -650.0
       # ICE has much less engine braking force compared to regen in EVs,
       # lower threshold removes some braking deadzone
-      max_regen_acceleration = -1. if CP.carFingerprint in EV_CAR else -0.1
+      self.BRAKE_THRESHOLD = self.MIN_TORQUE if CP.carFingerprint in EV_CAR else 0
 
-    self.GAS_LOOKUP_BP = [max_regen_acceleration, 0., self.ACCEL_MAX]
-    self.GAS_LOOKUP_V = [self.MAX_ACC_REGEN, 0., self.MAX_GAS]
-
-    self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, max_regen_acceleration]
+    self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, self.BRAKE_THRESHOLD]
     self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 0.]
+    self.BRAKE_LOOKUP_V_LOW_SPEED = self.BRAKE_LOOKUP_V
+    self.BRAKE_TORQUE = self.INACTIVE_TORQUE
+    self.COAST_TORQUE_OFFSET = 0.  # Coasting allowance before friction braking (Nm)
+
+    if CP.carFingerprint == CAR.CHEVROLET_SILVERADO:
+      # Stock ACC uses -540 Nm during friction braking, -500 Nm when inactive.
+      self.BRAKE_TORQUE = self.MIN_TORQUE
+      self.COAST_TORQUE_OFFSET = 100.
+      # Stock final-stop samples need ~12 more command units for gentle braking.
+      # Preserve the origin and strong-braking scale; blend back above 2 m/s.
+      self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, -1., -0.5, -0.2, -0.1, 0.]
+      self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 100., 50., 20., 10., 0.]
+      self.BRAKE_LOOKUP_V_LOW_SPEED = [self.MAX_BRAKE, 100., 62., 32., 10., 0.]
 
 
 class GMSafetyFlags(IntFlag):
@@ -94,6 +110,9 @@ class GMCarDocs(CarDocs):
 @dataclass(frozen=True, kw_only=True)
 class GMCarSpecs(CarSpecs):
   tireStiffnessFactor: float = 0.444  # not optimized yet
+  wheelRadius: float = 0.32  # 17" wheels + 215/50R17 tires
+  dragArea: float | None = None  # Cd * frontal area, m^2; None keeps the legacy force factor
+  rollingResistanceCoefficient: float = 0.0  # dimensionless; zero keeps the legacy mapping
 
 
 @dataclass
@@ -172,7 +191,9 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=16.3, tireStiffnessFactor=1.0),
+    # Confirmed 275/60R20 nominal radius and vehicle-specific road load.
+    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75, tireStiffnessFactor=1.0, wheelRadius=0.419,
+               dragArea=0.30 * 3.61, rollingResistanceCoefficient=0.004),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
