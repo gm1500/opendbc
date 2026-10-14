@@ -1,6 +1,6 @@
 import copy
 from opendbc.can import CANDefine, CANParser
-from opendbc.car import Bus, create_button_events, structs
+from opendbc.car import Bus, DT_CTRL, create_button_events, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.gm.values import DBC, AccState, CruiseButtons, STEER_THRESHOLD, SDGM_CAR, ALT_ACCS, GMFlags
@@ -30,6 +30,10 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.distance_button = 0
+    self.lka_button = False
+    self.lka_button_valid = False
+    self.lka_button_ts_nanos = 0
+    self.lka_button_age = float('inf')
 
   def update_button_enable(self, buttonEvents: list[structs.CarState.ButtonEvent]):
     if not self.CP.pcmCruise:
@@ -53,6 +57,25 @@ class CarState(CarStateBase):
     self.distance_button = pt_cp.vl["ASCMSteeringButton"]["DistanceButton"]
     self.buttons_counter = pt_cp.vl["ASCMSteeringButton"]["RollingCounter"]
     self.pscm_status = copy.copy(pt_cp.vl["PSCMStatus"])
+
+    # Keep the raw bit separate from stockLkas: its physical meaning still
+    # needs confirmation on the Sierra. An unseen/default zero is not OFF.
+    prev_lka_button, prev_lka_valid = self.lka_button, self.lka_button_valid
+    lka_ts = pt_cp.ts_nanos["ASCMSteeringButton"]["LKAButton"]
+    self.lka_button_age += DT_CTRL
+    if lka_ts > self.lka_button_ts_nanos:
+      self.lka_button_ts_nanos = lka_ts
+      self.lka_button_age = 0.
+      self.lka_button = bool(pt_cp.vl["ASCMSteeringButton"]["LKAButton"])
+    # The parser's bus timestamp also catches a delayed control iteration;
+    # counting 100 Hz updates alone would briefly accept an old cached bit.
+    bus_age = pt_cp.last_nonempty_nanos - self.lka_button_ts_nanos
+    self.lka_button_valid = (self.lka_button_ts_nanos > 0 and self.lka_button_age < .1 and
+                             0 <= bus_age < 100_000_000 and not pt_cp.bus_timeout)
+    ret.gmLkaButton = self.lka_button
+    ret.gmLkaButtonValid = self.lka_button_valid
+    lka_events = create_button_events(int(self.lka_button), int(prev_lka_button), {1: ButtonType.lkas}) \
+      if self.lka_button_valid and prev_lka_valid else []
 
     # Variables used for avoiding LKAS faults
     self.loopback_lka_steering_cmd_updated = len(loopback_cp.vl_all["ASCMLKASteeringCmd"]["RollingCounter"]) > 0
@@ -146,13 +169,15 @@ class CarState(CarStateBase):
       ret.rightBlindspot = pt_cp.vl["BCMBlindSpotMonitor"]["RightBSM"] == 1
 
     # Don't add event if transitioning from INIT, unless it's to an actual button
+    button_events = []
     if self.cruise_buttons != CruiseButtons.UNPRESS or prev_cruise_buttons != CruiseButtons.INIT:
-      ret.buttonEvents = [
+      button_events = [
         *create_button_events(self.cruise_buttons, prev_cruise_buttons, BUTTONS_DICT,
                               unpressed_btn=CruiseButtons.UNPRESS),
         *create_button_events(self.distance_button, prev_distance_button,
                               {1: ButtonType.gapAdjustCruise})
       ]
+    ret.buttonEvents = button_events + lka_events
 
     if ret.vEgo < self.CP.minSteerSpeed:
       ret.lowSpeedAlert = True

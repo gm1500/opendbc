@@ -217,6 +217,9 @@ struct CarState {
   leftBlinker @20 :Bool;
   rightBlinker @21 :Bool;
   genericToggle @23 :Bool;
+  # Raw GM ASCMSteeringButton.LKAButton, not confirmed stock LKAS engagement.
+  gmLkaButton @62 :Bool;
+  gmLkaButtonValid @63 :Bool;
 
   # lock info
   doorOpen @24 :Bool;           # ideally includes all doors
