@@ -28,6 +28,8 @@ class CarState(CarStateBase):
     self.pt_lka_steering_cmd_counter = 0
     self.cam_lka_steering_cmd_counter = 0
     self.buttons_counter = 0
+    self.buttons_ts_nanos = 0
+    self.resume_set_suppress_until = 0
 
     self.distance_button = 0
 
@@ -52,6 +54,7 @@ class CarState(CarStateBase):
     self.cruise_buttons = pt_cp.vl["ASCMSteeringButton"]["ACCButtons"]
     self.distance_button = pt_cp.vl["ASCMSteeringButton"]["DistanceButton"]
     self.buttons_counter = pt_cp.vl["ASCMSteeringButton"]["RollingCounter"]
+    self.buttons_ts_nanos = pt_cp.ts_nanos["ASCMSteeringButton"]["RollingCounter"]
     self.pscm_status = copy.copy(pt_cp.vl["PSCMStatus"])
 
     # Variables used for avoiding LKAS faults
@@ -126,6 +129,7 @@ class CarState(CarStateBase):
                       pt_cp.vl["EBCMFrictionBrakeStatus"]["FrictionBrakeUnavailable"] == 1)
 
     ret.cruiseState.enabled = pt_cp.vl["AcceleratorPedal2"]["CruiseState"] != AccState.OFF
+    ret.gmCruiseState = pt_cp.vl["AcceleratorPedal2"]["CruiseState"]
     ret.cruiseState.standstill = pt_cp.vl["AcceleratorPedal2"]["CruiseState"] == AccState.STANDSTILL
     if self.CP.networkLocation == NetworkLocation.fwdCamera:
       if self.CP.carFingerprint not in ALT_ACCS:
@@ -156,6 +160,14 @@ class CarState(CarStateBase):
 
     if ret.vEgo < self.CP.minSteerSpeed:
       ret.lowSpeedAlert = True
+
+    # A received copy of our diagnostic presses must not adjust openpilot's
+    # set speed or re-engage it. Cancel/gap events remain available. Pedals and
+    # disengagement end the experiment; physical RES/SET are intentionally
+    # ignored during it and for 0.5 s after the last diagnostic command.
+    if (self.CP.flags & GMFlags.RESUME_SET_TEST and self.resume_set_suppress_until > 0 and
+        self.buttons_ts_nanos <= self.resume_set_suppress_until):
+      ret.buttonEvents = [b.to_dict() for b in ret.buttonEvents if b.type not in (ButtonType.accelCruise, ButtonType.decelCruise)]
 
     return ret
 

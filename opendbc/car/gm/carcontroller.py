@@ -6,6 +6,7 @@ from opendbc.car.gm import gmcan
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.gm.values import CAR, DBC, CanBus, CarControllerParams, CruiseButtons
 from opendbc.car.interfaces import CarControllerBase
+from opendbc.car.gm.resume_set_test import ResumeSetActuation, TEST_ACCEL, REHOLD_ACCEL, MAX_SPEED
 
 VisualAlert = structs.CarControl.HUDControl.VisualAlert
 NetworkLocation = structs.CarParams.NetworkLocation
@@ -27,6 +28,7 @@ class CarController(CarControllerBase):
     self.last_steer_frame = 0
     self.last_button_frame = 0
     self.cancel_counter = 0
+    self.resume_set_test = ResumeSetActuation(CP)
 
     self.lka_steering_cmd_counter = 0
     self.lka_steering_cmd_counter_initialized = False
@@ -57,6 +59,9 @@ class CarController(CarControllerBase):
 
     # Send CAN commands.
     can_sends = []
+    test = self.resume_set_test
+    test.update(CC, CS, now_nanos * 1e-9, self.apply_brake > 0)
+    can_sends += test.buttons(self.packer_pt, CS, now_nanos * 1e-9)
 
     # Steering (Active: 50Hz, inactive: 10Hz)
     steer_step = self.params.STEER_STEP if CC.latActive else self.params.INACTIVE_STEER_STEP
@@ -93,23 +98,36 @@ class CarController(CarControllerBase):
     if self.CP.openpilotLongitudinalControl:
       # Gas/regen, brakes, and UI commands - all at 25Hz
       if self.frame % 4 == 0:
+        long_speed = CS.out.vEgo
+        if test.holding and not np.isfinite(long_speed):
+          # Fail closed without letting a bad speed sample turn the diagnostic
+          # rehold into a NaN-to-integer crash in the brake conversion.
+          long_speed = MAX_SPEED
         stopping = actuators.longControlState == LongCtrlState.stopping
+        if test.holding:
+          stopping = not test.active
         if not CC.longActive:
           # ASCM sends max regen when not enabled
           self.apply_gas = self.params.INACTIVE_TORQUE
           self.apply_brake = 0
         else:
           accel = np.clip(actuators.accel, self.params.ACCEL_MIN, self.params.ACCEL_MAX)
+          if test.active:
+            # Do not let a planner/PID output or stale carControl increase the
+            # experimental torque above its independent controller bound.
+            accel = min(accel, TEST_ACCEL)
+          elif test.holding:
+            accel = self.CP.stopAccel if CS.out.standstill and abs(CS.out.vEgoRaw) < 0.1 else REHOLD_ACCEL
           torque = self.accel_to_torque(accel, CS)
           if stopping:
             # LongControl resets feedback here; retain the existing final-stop brake calibration.
-            torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * CS.out.vEgo ** 2)
+            torque = self.CP.wheelRadius * (self.CP.mass * accel + self.params.STOPPING_DRAG_FORCE_FACTOR * long_speed ** 2)
           # Use the same force balance for gas and brakes to avoid a conflicting crossover.
           brake_threshold = self.params.BRAKE_THRESHOLD
           if self.params.COAST_TORQUE_OFFSET and not stopping:
             # Allow mild coasting above 18 km/h, with the full allowance at 40 km/h.
             # Restore the original crossover as modeled friction demand rises to 0.3 m/s^2.
-            speed_weight = np.interp(CS.out.vEgo, [5., 40. * CV.KPH_TO_MS], [0., 1.])
+            speed_weight = np.interp(long_speed, [5., 40. * CV.KPH_TO_MS], [0., 1.])
             friction_demand = max((brake_threshold - torque) / (self.CP.wheelRadius * self.CP.mass), 0.)
             brake_weight = np.interp(friction_demand, [0.1, 0.3], [1., 0.])
             brake_threshold -= self.params.COAST_TORQUE_OFFSET * speed_weight * brake_weight
@@ -117,10 +135,10 @@ class CarController(CarControllerBase):
 
           brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
           low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
-          brake_request = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
+          brake_request = int(round(np.interp(long_speed, [2., 4.], [low_speed_brake, brake])))
           # Avoid repeatedly entering friction braking for a single command unit.
           # Keep it once braking has started; larger requests pass immediately.
-          if (self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and CS.out.vEgo >= 5. and not stopping
+          if (self.CP.carFingerprint == CAR.CHEVROLET_SILVERADO and long_speed >= 5. and not stopping
               and self.apply_brake == 0 and brake_request == 1):
             brake_request = 0
           self.apply_brake = brake_request
@@ -134,7 +152,9 @@ class CarController(CarControllerBase):
         idx = (self.frame // 4) % 4
 
         at_full_stop = CC.longActive and CS.out.standstill
-        near_stop = CC.longActive and (abs(CS.out.vEgo) < self.params.NEAR_STOP_BRAKE_PHASE)
+        if test.holding:
+          at_full_stop = at_full_stop and np.isfinite(CS.out.vEgoRaw) and abs(CS.out.vEgoRaw) < 0.1
+        near_stop = CC.longActive and (abs(long_speed) < self.params.NEAR_STOP_BRAKE_PHASE)
         friction_brake_bus = CanBus.CHASSIS
         # GM Camera exceptions
         # TODO: can we always check the longControlState?
@@ -192,6 +212,10 @@ class CarController(CarControllerBase):
     new_actuators.torqueOutputCan = self.apply_torque_last
     new_actuators.gas = self.apply_gas
     new_actuators.brake = self.apply_brake
+    new_actuators.gmResumeSetHolding = test.holding
+    new_actuators.gmResumeSetActive = test.active
+    new_actuators.gmResumeSetButtonCount = test.tx_count
+    new_actuators.gmResumeSetReason = test.reason
 
     self.frame += 1
     return new_actuators, can_sends

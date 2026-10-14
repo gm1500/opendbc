@@ -79,11 +79,13 @@ class GMSafetyFlags(IntFlag):
   HW_CAM = 1
   HW_CAM_LONG = 2
   EV = 4
+  RESUME_SET_TEST = 8  # isolated Sierra camera-long diagnostic branch
 
 
 class GMFlags(IntFlag):
   # Detected flags
   HAS_BSM = 1  # blind spot monitoring
+  RESUME_SET_TEST = 2
 
 
 class Footnote(Enum):

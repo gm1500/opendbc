@@ -28,6 +28,18 @@ typedef enum {
 } GmHardware;
 static GmHardware gm_hw = GM_ASCM;
 static bool gm_pcm_cruise = false;
+static bool gm_resume_set_test = false;
+static int gm_test_speed = 0;
+static int gm_test_cruise = 0;
+static int gm_test_native_counter = -1;
+static uint32_t gm_test_speed_ts = 0U;
+static uint32_t gm_test_cruise_ts = 0U;
+static uint32_t gm_test_button_ts = 0U;
+static uint32_t gm_test_tx_ts = 0U;
+static bool gm_test_speed_seen = false;
+static bool gm_test_cruise_seen = false;
+static bool gm_test_tx_seen = false;
+static bool gm_test_button_used = false;
 
 static void gm_rx_hook(const CANPacket_t *msg) {
   const int GM_STANDSTILL_THRSLD = 10;  // 0.311kph
@@ -44,16 +56,29 @@ static void gm_rx_hook(const CANPacket_t *msg) {
     int left_rear_speed = (msg->data[0] << 8) | msg->data[1];
     int right_rear_speed = (msg->data[2] << 8) | msg->data[3];
     vehicle_moving = (left_rear_speed > GM_STANDSTILL_THRSLD) || (right_rear_speed > GM_STANDSTILL_THRSLD);
+    gm_test_speed = left_rear_speed > right_rear_speed ? left_rear_speed : right_rear_speed;
+    gm_test_speed_ts = microsecond_timer_get();
+    gm_test_speed_seen = true;
   }
 
   // ACC steering wheel buttons (GM_CAM is tied to the PCM)
   if (msg_matches(msg, 0x1E1U, 0U) && !gm_pcm_cruise) {
     int button = (msg->data[5] & 0x70U) >> 4;
+    uint32_t now = microsecond_timer_get();
+    if (button == GM_BTN_UNPRESS) {
+      gm_test_native_counter = msg->data[4] & 3U;
+      gm_test_button_ts = now;
+      gm_test_button_used = false;
+    } else {
+      gm_test_native_counter = -1;
+    }
 
     // enter controls on falling edge of set or rising edge of resume (avoids fault)
     bool set = (button != GM_BTN_SET) && (cruise_button_prev == GM_BTN_SET);
     bool res = (button == GM_BTN_RESUME) && (cruise_button_prev != GM_BTN_RESUME);
-    if (set || res) {
+    // Injected button echoes must never re-arm controls after a disengagement.
+    bool diagnostic_echo_window = gm_resume_set_test && gm_test_tx_seen && (safety_get_ts_elapsed(now, gm_test_tx_ts) <= 500000U);
+    if ((set || res) && !diagnostic_echo_window) {
       controls_allowed = true;
     }
 
@@ -77,6 +102,9 @@ static void gm_rx_hook(const CANPacket_t *msg) {
 
   if (msg_matches(msg, 0x1C4U, 0U)) {
     gas_pressed = msg->data[5] != 0U;
+    gm_test_cruise = (msg->data[1] >> 5) & 7U;
+    gm_test_cruise_ts = microsecond_timer_get();
+    gm_test_cruise_seen = true;
 
     // enter controls on rising edge of ACC, exit controls when ACC off
     if (gm_pcm_cruise) {
@@ -102,6 +130,35 @@ static bool gm_tx_hook(const CANPacket_t *msg) {
   };
 
   bool tx = true;
+
+  if ((msg->addr == 0x1E1U) && gm_resume_set_test) {
+    uint32_t now = microsecond_timer_get();
+    int button = (msg->data[5] >> 4) & 7U;
+    int counter = msg->data[4] & 3U;
+    int checksum = ((msg->data[5] & 0xFU) << 8) | msg->data[6];
+    int expected_checksum = (255 + (counter * 1263) - ((button - 1) * 16)) & 0xFFF;
+    // Exact neutral/RES/SET shape only: no gap, main, cancel, LKA, or drive-mode bits.
+    bool shape = (msg->bus == 0U) && (msg->data[0] == 0U) && (msg->data[1] == 0U) &&
+                 (msg->data[2] == 0U) && (msg->data[3] == 1U) && (msg->data[4] <= 3U) &&
+                 ((msg->data[5] & 0x80U) == 0U) && (checksum == expected_checksum);
+    bool fresh = gm_test_speed_seen && gm_test_cruise_seen && (gm_test_native_counter >= 0) &&
+                 (safety_get_ts_elapsed(now, gm_test_speed_ts) <= 100000U) &&
+                 (safety_get_ts_elapsed(now, gm_test_cruise_ts) <= 100000U) &&
+                 (safety_get_ts_elapsed(now, gm_test_button_ts) <= 100000U);
+    bool next_counter = counter == ((gm_test_native_counter + 1) % 4);
+    bool rate_ok = !gm_test_tx_seen || (safety_get_ts_elapsed(now, gm_test_tx_ts) >= 25000U);
+    bool press = (button == GM_BTN_RESUME) || (button == GM_BTN_SET);
+    bool allowed_press = press && controls_allowed && !brake_pressed && !gas_pressed &&
+                         !regen_braking && fresh && !gm_test_button_used && (gm_test_speed < 232) &&
+                         (gm_test_cruise == 4) && next_counter;
+    // Unpress remains possible following an abort/disengagement, without allowing any positive action.
+    tx = shape && rate_ok && ((button == GM_BTN_UNPRESS) || allowed_press);
+    if (tx) {
+      gm_test_tx_ts = now;
+      gm_test_tx_seen = true;
+      gm_test_button_used = true;
+    }
+  }
 
   // BRAKE: safety check
   if (msg->addr == 0x315U) {
@@ -156,6 +213,18 @@ static bool gm_tx_hook(const CANPacket_t *msg) {
 static safety_config gm_init(uint16_t param) {
   const uint16_t GM_PARAM_HW_CAM = 1;
   const uint16_t GM_PARAM_EV = 4;
+  gm_resume_set_test = false;
+  gm_test_speed = 0;
+  gm_test_cruise = 0;
+  gm_test_native_counter = -1;
+  gm_test_speed_ts = 0U;
+  gm_test_cruise_ts = 0U;
+  gm_test_button_ts = 0U;
+  gm_test_tx_ts = 0U;
+  gm_test_speed_seen = false;
+  gm_test_cruise_seen = false;
+  gm_test_tx_seen = false;
+  gm_test_button_used = false;
 
   // common safety checks assume unscaled integer values
   static const int GM_GAS_TO_CAN = 8;  // 1 / 0.125
@@ -196,6 +265,14 @@ static safety_config gm_init(uint16_t param) {
     {0x370, 0, 6, .check_relay = true},
     {0x184, 2, 8, .check_relay = true},
   };
+  static const CanMsg GM_RESUME_SET_TEST_TX_MSGS[] = {
+    {0x180, 0, 4, .check_relay = true},
+    {0x315, 0, 5, .check_relay = true},
+    {0x2CB, 0, 8, .check_relay = true},
+    {0x370, 0, 6, .check_relay = true},
+    {0x184, 2, 8, .check_relay = true},
+    {0x1E1, 0, 7, .check_relay = false},
+  };
 #endif
 
   static RxCheck gm_rx_checks[] = {
@@ -232,6 +309,13 @@ static safety_config gm_init(uint16_t param) {
     gm_pcm_cruise = !gm_cam_long;
     if (gm_cam_long) {
       ret = BUILD_SAFETY_CFG(gm_rx_checks, GM_CAM_LONG_TX_MSGS);
+      // Exact dedicated non-EV camera-long configuration only (1 | 2 | 8).
+      // No direct-longitudinal limits or camera forwarding rules are relaxed.
+      const uint16_t GM_PARAM_RESUME_SET_TEST = 8;
+      gm_resume_set_test = param == (GM_PARAM_HW_CAM | GM_PARAM_HW_CAM_LONG | GM_PARAM_RESUME_SET_TEST);
+      if (gm_resume_set_test) {
+        ret = BUILD_SAFETY_CFG(gm_rx_checks, GM_RESUME_SET_TEST_TX_MSGS);
+      }
     }
 #endif
   } else {

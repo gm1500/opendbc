@@ -196,6 +196,9 @@ class CarInterface(CarInterfaceBase):
       # with foot on brake to allow engagement, but this platform only has that check in the camera.
       # TODO: check if this is split by EV/ICE with more platforms in the future
       if ret.openpilotLongitudinalControl:
+        if ret.networkLocation == NetworkLocation.fwdCamera:
+          ret.flags |= GMFlags.RESUME_SET_TEST.value
+          ret.safetyConfigs[0].safetyParam |= GMSafetyFlags.RESUME_SET_TEST.value
         ret.minEnableSpeed = -1.
         ret.stopAccel = -0.37
         ret.longitudinalActuatorDelay = 0.5
