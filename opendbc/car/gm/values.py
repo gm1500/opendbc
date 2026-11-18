@@ -61,6 +61,7 @@ class CarControllerParams:
     # Vehicle-specific torque mapping; leave all other GM camera/ASCM mappings stock.
     if CP.carFingerprint == CAR.CHEVROLET_SILVERADO:
       specs = CAR.CHEVROLET_SILVERADO.config.specs
+      assert specs.dragArea is not None
       self.MAX_TORQUE = 2450.
       self.MIN_TORQUE = -540.
       self.INACTIVE_REGEN = -500.

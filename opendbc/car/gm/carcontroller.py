@@ -36,6 +36,7 @@ class CarController(CarControllerBase):
     if self.sierra_torque:
       specs = CAR.CHEVROLET_SILVERADO.config.specs
       # 2450 kg nominal curb weight + 136 kg allowance used by the prior tune.
+      assert specs.mass is not None and specs.wheelRadius is not None
       self.torque_mass = specs.mass + 136.
       self.torque_wheel_radius = specs.wheelRadius
 
@@ -122,7 +123,7 @@ class CarController(CarControllerBase):
               brake_weight = np.interp(friction_demand, [0.1, 0.3], [1., 0.])
               brake_threshold -= self.params.COAST_TORQUE_OFFSET * speed_weight * brake_weight
             brake_accel = min((torque - brake_threshold) / (self.torque_wheel_radius * self.torque_mass), 0)
-  
+
             brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V)
             low_speed_brake = np.interp(brake_accel, self.params.BRAKE_LOOKUP_BP, self.params.BRAKE_LOOKUP_V_LOW_SPEED)
             brake_request = int(round(np.interp(CS.out.vEgo, [2., 4.], [low_speed_brake, brake])))
@@ -138,7 +139,7 @@ class CarController(CarControllerBase):
               self.apply_gas = self.params.BRAKE_TORQUE
             else:
               self.apply_gas = int(round(np.clip(torque, self.params.MIN_TORQUE, self.params.MAX_TORQUE)))
-  
+
           else:
             # Keep the stock acceleration-to-gas/brake mapping for every other GM.
             self.apply_gas = float(np.interp(actuators.accel, self.params.GAS_LOOKUP_BP, self.params.GAS_LOOKUP_V))
