@@ -143,6 +143,8 @@ static bool gm_tx_hook(const CANPacket_t *msg) {
 static safety_config gm_init(uint16_t param) {
   const uint16_t GM_PARAM_HW_CAM = 1;
   const uint16_t GM_PARAM_EV = 4;
+  const uint16_t GM_PARAM_HW_CAM_LONG = 2;
+  const uint16_t GM_PARAM_SILVERADO_TORQUE = 8;
 
   // common safety checks assume unscaled integer values
   enum { GM_GAS_TO_CAN = 8 };  // 1 / 0.125
@@ -169,6 +171,14 @@ static safety_config gm_init(uint16_t param) {
 
   static const LongitudinalLimits GM_CAM_LONG_LIMITS = {
     .max_gas = 1346 * GM_GAS_TO_CAN,
+    .min_gas = -540 * GM_GAS_TO_CAN,
+    .inactive_gas = -500 * GM_GAS_TO_CAN,
+    .max_brake = 400,
+  };
+
+  // The higher calibrated torque command is limited to Silverado/Sierra in OP-long mode.
+  static const LongitudinalLimits GM_SILVERADO_CAM_LONG_LIMITS = {
+    .max_gas = 2450 * GM_GAS_TO_CAN,
     .min_gas = -540 * GM_GAS_TO_CAN,
     .inactive_gas = -500 * GM_GAS_TO_CAN,
     .max_brake = 400,
@@ -202,7 +212,8 @@ static safety_config gm_init(uint16_t param) {
 
   if (GET_FLAG(param, GM_PARAM_HW_CAM)) {
     safety_setup.gm_hw = GM_CAM;
-    safety_setup.gm_long_limits = &GM_CAM_LONG_LIMITS;
+    safety_setup.gm_long_limits = (GET_FLAG(param, GM_PARAM_SILVERADO_TORQUE) && GET_FLAG(param, GM_PARAM_HW_CAM_LONG))
+                                   ? &GM_SILVERADO_CAM_LONG_LIMITS : &GM_CAM_LONG_LIMITS;
   } else {
     safety_setup.gm_hw = GM_ASCM;
     safety_setup.gm_long_limits = &GM_ASCM_LONG_LIMITS;
@@ -214,7 +225,6 @@ static safety_config gm_init(uint16_t param) {
   if (safety_setup.gm_hw == GM_CAM) {
     ret = BUILD_SAFETY_CFG(gm_rx_checks, GM_CAM_TX_MSGS);
 #ifdef ALLOW_DEBUG
-    const uint16_t GM_PARAM_HW_CAM_LONG = 2;
     const bool gm_cam_long = GET_FLAG(param, GM_PARAM_HW_CAM_LONG);
     safety_setup.gm_pcm_cruise = !gm_cam_long;
     if (gm_cam_long) {

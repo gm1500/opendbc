@@ -235,6 +235,15 @@ class TestGmCameraLongitudinalSafety(GmLongitudinalBase, TestGmCameraSafetyBase)
     return GMSafetyFlags.HW_CAM | GMSafetyFlags.HW_CAM_LONG | self.EXTRA_SAFETY_PARAM
 
 
+class TestGmSilveradoCameraLongitudinalSafety(TestGmCameraLongitudinalSafety):
+  # The raised torque envelope must never affect the standard GM camera configurations.
+  MAX_GAS = 2450
+
+  @property
+  def SAFETY_PARAM(self):
+    return super().SAFETY_PARAM | GMSafetyFlags.SILVERADO_TORQUE
+
+
 class TestGmCameraLongitudinalEVSafety(TestGmCameraLongitudinalSafety, TestGmEVSafetyBase):
   pass
 

@@ -58,11 +58,28 @@ class CarControllerParams:
     self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, max_regen_acceleration]
     self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 0.]
 
+    # Vehicle-specific torque mapping; leave all other GM camera/ASCM mappings stock.
+    if CP.carFingerprint == CAR.CHEVROLET_SILVERADO:
+      specs = CAR.CHEVROLET_SILVERADO.config.specs
+      self.MAX_TORQUE = 2450.
+      self.MIN_TORQUE = -540.
+      self.INACTIVE_REGEN = -500.
+      self.BRAKE_TORQUE = -540.
+      self.BRAKE_THRESHOLD = 0.
+      self.STOPPING_DRAG_FORCE_FACTOR = 0.3
+      self.DRAG_FORCE_FACTOR = 0.5 * 1.225 * specs.dragArea
+      self.ROLLING_RESISTANCE_COEFFICIENT = specs.rollingResistanceCoefficient
+      self.COAST_TORQUE_OFFSET = 100.
+      self.BRAKE_LOOKUP_BP = [self.ACCEL_MIN, -1., -0.5, -0.2, -0.1, 0.]
+      self.BRAKE_LOOKUP_V = [self.MAX_BRAKE, 100., 50., 20., 10., 0.]
+      self.BRAKE_LOOKUP_V_LOW_SPEED = [self.MAX_BRAKE, 100., 62., 32., 10., 0.]
+
 
 class GMSafetyFlags(IntFlag):
   HW_CAM = 1
   HW_CAM_LONG = 2
   EV = 4
+  SILVERADO_TORQUE = 8
 
 
 class GMFlags(IntFlag):
@@ -94,6 +111,11 @@ class GMCarDocs(CarDocs):
 @dataclass(frozen=True, kw_only=True)
 class GMCarSpecs(CarSpecs):
   tireStiffnessFactor: float = 0.444  # not optimized yet
+  # These were removed from generic CarParams; preserve local inputs for the Sierra torque map.
+  mass: float | None = None  # nominal curb mass, kg
+  wheelRadius: float | None = None  # metres
+  dragArea: float | None = None  # Cd times frontal area, m^2
+  rollingResistanceCoefficient: float = 0.
 
 
 @dataclass
@@ -172,7 +194,9 @@ class CAR(Platforms):
       GMCarDocs("Chevrolet Silverado 1500 2020-21", "Safety Package II"),
       GMCarDocs("GMC Sierra 1500 2020-21", "Driver Alert Package II", video="https://youtu.be/5HbNoBLzRwE"),
     ],
-    GMCarSpecs(wheelbase=3.75, steerRatio=16.3, tireStiffnessFactor=1.0),
+    GMCarSpecs(mass=2450, wheelbase=3.75, steerRatio=17.6, centerToFrontRatio=0.75,
+               tireStiffnessFactor=1.0, wheelRadius=0.419, dragArea=0.30 * 3.61,
+               rollingResistanceCoefficient=0.004),
   )
   CHEVROLET_EQUINOX = GMPlatformConfig(
     [GMCarDocs("Chevrolet Equinox 2019-22")],
