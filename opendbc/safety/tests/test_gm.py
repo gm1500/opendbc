@@ -243,6 +243,15 @@ class TestGmSilveradoCameraLongitudinalSafety(TestGmCameraLongitudinalSafety):
   def SAFETY_PARAM(self):
     return super().SAFETY_PARAM | GMSafetyFlags.SILVERADO_TORQUE
 
+  def test_silverado_torque_requires_camera_longitudinal_flags(self):
+    for safety_param in (GMSafetyFlags.HW_CAM | GMSafetyFlags.HW_CAM_LONG,
+                         GMSafetyFlags.HW_CAM | GMSafetyFlags.SILVERADO_TORQUE,
+                         GMSafetyFlags.SILVERADO_TORQUE):
+      with self.subTest(safety_param=safety_param):
+        self.safety.set_safety_hooks(self.SAFETY_MODEL, safety_param)
+        self.safety.set_controls_allowed(True)
+        self.assertFalse(self._tx(self._send_gas_msg(2450)))
+
 
 class TestGmCameraLongitudinalEVSafety(TestGmCameraLongitudinalSafety, TestGmEVSafetyBase):
   pass

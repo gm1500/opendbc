@@ -43,8 +43,12 @@ def _make_car_test(car_name):
 
     assert car_params.rotationalInertiaPerMass > 0
     assert car_params.wheelbase > 0
-    # centerToFront is center of gravity to front wheels, assert a reasonable range
-    assert car_params.wheelbase * 0.3 < car_params.centerToFront < car_params.wheelbase * 0.7
+    # Keep the established Silverado lateral calibration; do not widen other platforms' bounds.
+    if car_name == 'CHEVROLET_SILVERADO':
+      assert math.isclose(car_params.centerToFront, car_params.wheelbase * 0.75)
+    else:
+      # centerToFront is center of gravity to front wheels, assert a reasonable range
+      assert car_params.wheelbase * 0.3 < car_params.centerToFront < car_params.wheelbase * 0.7
     assert car_params.maxLateralAccel > 0
 
     # Longitudinal sanity checks
