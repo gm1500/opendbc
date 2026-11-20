@@ -193,6 +193,9 @@ static bool rx_hook_copy(const CANPacket_t *msg) {
 
   // Handles gas, brake, and regen paddle
   generic_rx_checks();
+  if (safety_setup.gm_lateral_only) {
+    gm_refresh_lateral_permission();
+  }
 
   // the relay malfunction hook runs on all incoming rx messages.
   // check all applicable tx msgs for liveness on sending bus.
@@ -291,6 +294,9 @@ static void tick_copy(void) {
   }
 
   safety.safety_rx_checks_invalid = rx_checks_invalid;
+  if (safety_setup.gm_lateral_only) {
+    gm_refresh_lateral_permission();
+  }
 }
 
 static void heartbeat_check_copy(void) {
@@ -377,6 +383,8 @@ static int set_hooks_copy(uint16_t mode, uint16_t param) {
     .heartbeat_engaged_mismatches = safety.heartbeat_engaged_mismatches,
   };
 
+  // Optional lateral-only support must never leak into a different safety mode.
+  safety_setup.gm_lateral_only = false;
   safety_config cfg = {0};
 
   int set_status = -1;  // not set
@@ -443,6 +451,49 @@ void safety_tick(void) {
 void safety_heartbeat(bool engaged) {
   safety_a.state.heartbeat_engaged = engaged;
   safety_b.state.heartbeat_engaged = engaged;
+}
+
+static void lateral_request_copy(bool requested, bool enabled) {
+  // Refresh first so an expired lease cannot be hidden by its replacement.
+  gm_refresh_lateral_permission();
+  if (enabled && !safety.lateral_enabled) {
+    safety.lateral_suspended = false;
+  }
+  safety.lateral_enabled = enabled && safety_setup.gm_lateral_only;
+  if (!safety.lateral_enabled) {
+    safety.lateral_armed = false;
+    safety.lateral_rearm_grace = false;
+  }
+  safety.lateral_requested = requested && safety.lateral_enabled;
+  safety.ts_lateral_request = safety_ts;
+  gm_refresh_lateral_permission();
+}
+
+void safety_set_lateral_request(bool requested, bool enabled) {
+  safety_ts = microsecond_timer_get();
+  current_copy = &safety_b;
+  lateral_request_copy(requested, enabled);
+  current_copy = &safety_a;
+  lateral_request_copy(requested, enabled);
+  (void)safety_redundancy_check(safety_states_equal());
+}
+
+void safety_set_lateral_request_flags(uint16_t flags) {
+  safety_ts = microsecond_timer_get();
+  const bool valid = (flags & ~7U) == 0U;
+  const bool fault = valid && ((flags & 4U) != 0U);
+  const bool rearming = safety.lateral_rearm_grace && (safety_get_ts_elapsed(safety_ts, safety.ts_lateral_rearm) < 500000U);
+  if (safety_setup.gm_lateral_only && (!valid || (fault && safety.lateral_armed && !rearming))) {
+    // Corruption or a stale/faulted host is never an OFF→ON driver gesture.
+    safety_a.state.lateral_suspended = true;
+    safety_b.state.lateral_suspended = true;
+  }
+  bool enabled = safety.lateral_enabled;
+  if (valid) {
+    enabled = ((flags & 2U) != 0U) || (fault && safety.lateral_enabled);
+  }
+  // A known startup fault waits for readiness; after arming it requires rearm.
+  safety_set_lateral_request(valid && !fault && ((flags & 1U) != 0U), enabled);
 }
 
 void safety_alternative_experience(int alt_exp) {

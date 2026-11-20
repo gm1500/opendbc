@@ -70,11 +70,11 @@ static bool rt_torque_rate_limit_check(int val, int val_last, const int MAX_RT_D
 }
 
 // Safety checks for torque-based steering commands
-static bool steer_torque_cmd_checks(int desired_torque, bool steer_req, const TorqueSteeringLimits limits) {
+static bool steer_torque_cmd_checks_with_permission(int desired_torque, bool steer_req, const TorqueSteeringLimits limits, bool controls_allowed) {
   bool violation = false;
   uint32_t ts = safety_ts;
 
-  if (safety.controls_allowed) {
+  if (controls_allowed) {
     // Some safety models support variable torque limit based on vehicle speed
     int max_torque = limits.max_torque;
     if (limits.dynamic_max_torque) {
@@ -109,7 +109,7 @@ static bool steer_torque_cmd_checks(int desired_torque, bool steer_req, const To
   }
 
   bool torque_requested = desired_torque != 0;
-  if (!safety.controls_allowed && torque_requested) {
+  if (!controls_allowed && torque_requested) {
     violation = true;
   }
 
@@ -151,7 +151,7 @@ static bool steer_torque_cmd_checks(int desired_torque, bool steer_req, const To
   }
 
   // reset to 0 if either controls is not allowed or there's a violation
-  if (violation || !safety.controls_allowed) {
+  if (violation || !controls_allowed) {
     safety.valid_steer_req_count = 0;
     safety.invalid_steer_req_count = 0;
     safety.desired_torque_last = 0;
@@ -161,6 +161,11 @@ static bool steer_torque_cmd_checks(int desired_torque, bool steer_req, const To
   }
 
   return violation;
+}
+
+// Existing safety modes retain their original engagement permission.
+static bool steer_torque_cmd_checks(int desired_torque, bool steer_req, const TorqueSteeringLimits limits) {
+  return steer_torque_cmd_checks_with_permission(desired_torque, steer_req, limits, safety.controls_allowed);
 }
 
 static bool rt_angle_rate_limit_check(AngleSteeringLimits limits) {

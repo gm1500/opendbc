@@ -253,6 +253,364 @@ class TestGmSilveradoCameraLongitudinalSafety(TestGmCameraLongitudinalSafety):
         self.assertFalse(self._tx(self._send_gas_msg(2450)))
 
 
+class TestGmSilveradoLateralOnlySafety(TestGmSilveradoCameraLongitudinalSafety):
+  @property
+  def SAFETY_PARAM(self):
+    return super().SAFETY_PARAM | GMSafetyFlags.LATERAL_ONLY
+
+  def _gear_msg(self, gear):
+    return self.packer.make_can_msg_safety("ECMPRDNL2", 0, {"PRNDL2": gear})
+
+  def _fresh_inputs(self, gear=4):
+    for name, values in (("PSCMStatus", {}), ("EBCMWheelSpdRear", {}),
+                         ("ASCMSteeringButton", {"ACCButtons": Buttons.UNPRESS}),
+                         ("ECMAcceleratorPos", {}), ("AcceleratorPedal2", {}),
+                         ("ECMEngineStatus", {}), ("ECMPRDNL2", {"PRNDL2": gear})):
+      self.assertTrue(self._rx(self.packer.make_can_msg_safety(name, 0, values)))
+
+  def _enable_lateral(self):
+    self._fresh_inputs()
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertTrue(self.safety.safety_a.state.lateral_allowed)
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_lateral_boot_requires_intent_readiness_and_drive(self):
+    for request, enabled, gear in ((False, False, 4), (False, True, 4), (True, False, 4),
+                                   (True, True, 0), (True, True, 1), (True, True, 2),
+                                   (True, True, 3), (True, True, 5), (True, True, 6), (True, True, 7)):
+      with self.subTest(request=request, enabled=enabled, gear=gear):
+        self._reset_safety_hooks()
+        self._fresh_inputs(gear)
+        self.safety.safety_set_lateral_request(request, enabled)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self._reset_safety_hooks()
+    self._enable_lateral()
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_heartbeat_flags_legacy_and_unknown(self):
+    for flags in (0, 1, 2, 3):
+      with self.subTest(flags=flags):
+        self._reset_safety_hooks()
+        self._fresh_inputs()
+        self.safety.safety_set_lateral_request_flags(flags)
+        self.assertEqual(self._tx(self._torque_cmd_msg(1)), flags == 3)
+        self.assertFalse(self.safety.get_controls_allowed())
+    for flags in (8, 9, 15, 255, 256, 32768, 65535):
+      with self.subTest(flags=flags):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self.safety.safety_set_lateral_request_flags(flags)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+        self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+        self.safety.safety_set_lateral_request_flags(0)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_host_fault_during_pause_survives_host_restart(self):
+    for pause in ('brake', 'reverse', 'not_ready'):
+      for fault_flags in (4, 5, 6, 7):
+        with self.subTest(pause=pause, fault_flags=fault_flags):
+          self._reset_safety_hooks()
+          self._enable_lateral()
+          if pause == 'brake':
+            self._rx(self._user_brake_msg(True))
+          elif pause == 'reverse':
+            self._rx(self._gear_msg(2))
+          else:
+            self.safety.safety_set_lateral_request_flags(2)
+          self.safety.safety_set_lateral_request_flags(fault_flags)
+          self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+          self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+          self.assertTrue(self.safety.safety_a.state.lateral_enabled)
+          self._fresh_inputs()
+          # A restarted host has lost its software latch but cannot clear Panda's.
+          self.safety.safety_set_lateral_request_flags(3)
+          self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+          self.safety.safety_set_lateral_request_flags(0)
+          self.safety.safety_set_lateral_request_flags(3)
+          self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_startup_host_fault_waits_without_latching(self):
+    self._fresh_inputs()
+    self.safety.safety_set_lateral_request_flags(6)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+    self.safety.safety_set_lateral_request_flags(3)
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_physical_rearm_tolerates_old_host_fault_snapshot(self):
+    for button in (Buttons.DECEL_SET, Buttons.RES_ACCEL):
+      with self.subTest(button=button):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self.safety.safety_set_lateral_request_flags(6)
+        self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+        self._rx(self._button_msg(button))
+        self._rx(self._button_msg(Buttons.UNPRESS))
+        self.safety.set_controls_allowed(False)
+        self.safety.set_timer(100000)
+        self._fresh_inputs()
+        self.safety.safety_set_lateral_request_flags(6)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+        self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_physical_rearm_host_fault_grace_expires(self):
+    for start in (0, 0xFFFFFF00):
+      with self.subTest(start=start):
+        self._reset_safety_hooks()
+        self.safety.set_timer(start)
+        self._enable_lateral()
+        self._rx(self._button_msg(Buttons.RES_ACCEL))
+        self._rx(self._button_msg(Buttons.UNPRESS))
+        self.safety.set_controls_allowed(False)
+        for elapsed, suspended in ((499999, False), (500000, True)):
+          self.safety.set_timer((start + elapsed) & 0xFFFFFFFF)
+          self._fresh_inputs()
+          self.safety.safety_set_lateral_request_flags(6)
+          self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+          self.assertEqual(self.safety.safety_a.state.lateral_suspended, suspended)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_physical_rearm_never_masks_independent_fault_or_cancel(self):
+    for fault in ('invalid_gear', 'relay', 'cancel', 'unknown_flags', 'stale_can'):
+      with self.subTest(fault=fault):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self._rx(self._button_msg(Buttons.RES_ACCEL))
+        self._rx(self._button_msg(Buttons.UNPRESS))
+        self.safety.set_controls_allowed(False)
+        self.safety.set_timer(100000)
+        if fault == 'invalid_gear':
+          self._rx(self._gear_msg(15))
+        elif fault == 'relay':
+          self.safety.set_relay_malfunction(True)
+        elif fault == 'cancel':
+          self._rx(self._button_msg(Buttons.CANCEL))
+        elif fault == 'unknown_flags':
+          self.safety.safety_set_lateral_request_flags(8)
+        else:
+          self.safety.set_rx_checks_received(0, 500000)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+        self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+
+  def test_lateral_does_not_grant_longitudinal(self):
+    self._enable_lateral()
+    self.assertFalse(self._tx(self._send_gas_msg(1)))
+    self.assertFalse(self._tx(self._send_brake_msg(1)))
+    self.assertTrue(self._tx(self._send_gas_msg(self.INACTIVE_GAS)))
+    values = {"GasRegenCmd": self.INACTIVE_GAS, "GasRegenCmdActive": 1}
+    self.assertFalse(self._tx(self.packer.make_can_msg_safety("ASCMGasRegenCmd", 0, values)))
+
+  def test_lateral_brake_pauses_steering_and_disengages_longitudinal(self):
+    self._enable_lateral()
+    self.safety.set_controls_allowed(True)
+    self._rx(self._speed_msg(10))
+    self._rx(self._user_brake_msg(True))
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self._tx(self._send_brake_msg(1)))
+    self.assertFalse(self._tx(self._send_gas_msg(1)))
+    self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+    self._rx(self._user_brake_msg(False))
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_lateral_cancel_latches_through_readiness_recovery(self):
+    self._enable_lateral()
+    self._rx(self._button_msg(Buttons.CANCEL))
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+    self.safety.safety_set_lateral_request(False, True)
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.safety.safety_set_lateral_request(False, False)
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_lateral_cancel_rearms_on_real_set_resume(self):
+    for button in (Buttons.DECEL_SET, Buttons.RES_ACCEL):
+      with self.subTest(button=button):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self._rx(self._button_msg(Buttons.CANCEL))
+        self._rx(self._button_msg(button))
+        self._rx(self._button_msg(Buttons.UNPRESS))
+        # Test lateral independently of the normal cruise permission these buttons grant.
+        self.safety.set_controls_allowed(False)
+        self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_request_expiry_latches(self):
+    self._enable_lateral()
+    self.safety.set_timer(500000)
+    self.safety.set_rx_checks_received(-1, 0)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+
+  def test_lateral_lease_boundary_and_timer_wrap(self):
+    for start in (1000000, 0xFFFFFF00):
+      with self.subTest(start=start):
+        self._reset_safety_hooks()
+        self.safety.set_timer(start)
+        self._enable_lateral()
+        self.safety.set_timer((start + 499999) & 0xFFFFFFFF)
+        self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+        self.safety.set_timer((start + 500000) & 0xFFFFFFFF)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_safety_tick_revokes_stale_permission(self):
+    self._enable_lateral()
+    self.safety.set_timer(500000)
+    self.safety.safety_tick()
+    self.assertFalse(self.safety.safety_a.state.lateral_allowed)
+    self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+
+  def test_lateral_old_lease_cannot_be_hidden_by_heartbeat(self):
+    self._enable_lateral()
+    self.safety.set_timer(500000)
+    self.safety.set_rx_checks_received(-1, 0)
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+
+  def test_lateral_every_rx_must_be_recent(self):
+    for index in range(self.safety.get_rx_checks_len()):
+      with self.subTest(index=index):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self.safety.set_timer(500000)
+        self.safety.set_rx_checks_received(index, 500000)
+        self.safety.safety_set_lateral_request(True, True)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+        self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+
+  def test_lateral_fault_during_benign_pause_stays_latched(self):
+    for pause in ('brake', 'reverse', 'not_ready'):
+      for fault in ('heartbeat', 'can', 'invalid_gear'):
+        with self.subTest(pause=pause, fault=fault):
+          self._reset_safety_hooks()
+          self.safety.set_timer(0)
+          self._enable_lateral()
+          if pause == 'brake':
+            self._rx(self._user_brake_msg(True))
+          elif pause == 'reverse':
+            self._rx(self._gear_msg(2))
+          else:
+            self.safety.safety_set_lateral_request(False, True)
+          self.assertFalse(self.safety.safety_a.state.lateral_allowed)
+          self.assertTrue(self.safety.safety_a.state.lateral_armed)
+          self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+          if fault == 'heartbeat':
+            self.safety.set_timer(500000)
+            self.safety.set_rx_checks_received(-1, 0)
+            self.safety.safety_tick()
+          elif fault == 'can':
+            self.safety.set_timer(400000)
+            self.safety.safety_set_lateral_request(False, True)
+            self.safety.set_timer(500000)
+            self.safety.safety_tick()
+          else:
+            self._rx(self._gear_msg(15))
+          self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+          self._fresh_inputs()
+          self.safety.safety_set_lateral_request(True, True)
+          self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+          self.safety.safety_set_lateral_request(False, False)
+          self.safety.safety_set_lateral_request(True, True)
+          self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_missing_inputs_before_first_arm_do_not_latch(self):
+    self.safety.safety_set_lateral_request(True, True)
+    self.safety.set_timer(600000)
+    self.safety.safety_tick()
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self.safety.safety_a.state.lateral_armed)
+    self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+    self._fresh_inputs()
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_unknown_rx_cannot_boot(self):
+    self._rx(self._gear_msg(4))
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_wrong_bus_gear_cannot_boot(self):
+    self._fresh_inputs(1)
+    self._rx(self.packer.make_can_msg_safety("ECMPRDNL2", 2, {"PRNDL2": 4}))
+    self.safety.safety_set_lateral_request(True, True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_reverse_pauses_and_drive_resumes(self):
+    self._enable_lateral()
+    self._rx(self._gear_msg(2))
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self.safety.safety_a.state.lateral_suspended)
+    self._rx(self._gear_msg(4))
+    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_invalid_gear_latches(self):
+    self._enable_lateral()
+    self._rx(self._gear_msg(15))
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertTrue(self.safety.safety_a.state.lateral_suspended)
+    self._rx(self._gear_msg(4))
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_relay_fault_stops(self):
+    self._enable_lateral()
+    self.safety.set_relay_malfunction(True)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_torque_rate_driver_and_request_limits(self):
+    self._enable_lateral()
+    self.assertFalse(self._tx(self._torque_cmd_msg(self.MAX_RATE_UP + 1)))
+    self.assertFalse(self._tx(self._torque_cmd_msg(1, steer_req=0)))
+    self.safety.set_desired_torque_last(300)
+    self.safety.set_rt_torque_last(300)
+    self.assertFalse(self._tx(self._torque_cmd_msg(301)))
+    self.safety.set_desired_torque_last(0)
+    self.safety.set_rt_torque_last(0)
+    self.safety.set_torque_driver(-400, -400)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_only_supported_silverado_camera_long(self):
+    for flags in (0, GMSafetyFlags.HW_CAM, GMSafetyFlags.HW_CAM | GMSafetyFlags.HW_CAM_LONG,
+                  GMSafetyFlags.SILVERADO_TORQUE, GMSafetyFlags.HW_CAM | GMSafetyFlags.SILVERADO_TORQUE,
+                  GMSafetyFlags.HW_CAM | GMSafetyFlags.HW_CAM_LONG | GMSafetyFlags.SILVERADO_TORQUE | GMSafetyFlags.EV):
+      with self.subTest(flags=flags):
+        self.safety.set_safety_hooks(self.SAFETY_MODEL, flags | GMSafetyFlags.LATERAL_ONLY)
+        self.safety.safety_set_lateral_request(True, True)
+        self.assertFalse(self.safety.safety_a.setup.gm_lateral_only)
+        self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+
+  def test_lateral_capability_clears_when_safety_mode_changes(self):
+    for mode in (CarParams.SafetyModel.silent, CarParams.SafetyModel.noOutput,
+                 CarParams.SafetyModel.hondaNidec, CarParams.SafetyModel.toyota):
+      with self.subTest(mode=mode):
+        self.safety.set_safety_hooks(self.SAFETY_MODEL, self.SAFETY_PARAM)
+        self._enable_lateral()
+        self.safety.set_safety_hooks(mode, 0)
+        self.assertFalse(self.safety.safety_a.setup.gm_lateral_only)
+        self.safety.safety_set_lateral_request_flags(3)
+        self.assertFalse(self.safety.safety_a.state.lateral_allowed)
+        self.assertFalse(self.safety.safety_a.state.lateral_armed)
+        self.assertFalse(self.safety.safety_a.state.lateral_enabled)
+
+  def test_lateral_safety_mode_reset_revokes_permission(self):
+    self._enable_lateral()
+    self._reset_safety_hooks()
+    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self.assertFalse(self.safety.safety_a.state.lateral_enabled)
+
+
 class TestGmCameraLongitudinalEVSafety(TestGmCameraLongitudinalSafety, TestGmEVSafetyBase):
   pass
 

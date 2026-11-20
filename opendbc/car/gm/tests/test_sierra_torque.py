@@ -40,6 +40,7 @@ class TestSierraTorque(unittest.TestCase):
     self.assertAlmostEqual(ci.CP.longitudinalActuatorDelay, .5)
     self.assertEqual(ci.CC.params.MAX_TORQUE, 2450.)
     self.assertTrue(ci.CP.safetyConfigs[0].safetyParam & GMSafetyFlags.SILVERADO_TORQUE)
+    self.assertTrue(ci.CP.safetyConfigs[0].safetyParam & GMSafetyFlags.LATERAL_ONLY)
     self.assertFalse(ci.CP.autoResumeSng)
     # Do not reintroduce generic mass fields removed by upstream.
     self.assertNotIn('mass', CarParams.schema.fields)
@@ -50,6 +51,8 @@ class TestSierraTorque(unittest.TestCase):
         with self.subTest(candidate=candidate, alpha_long=alpha_long):
           ci = interface(candidate, alpha_long)
           command(ci, 12., 0., active=False)
+          self.assertEqual(bool(ci.CP.safetyConfigs[0].safetyParam & GMSafetyFlags.LATERAL_ONLY),
+                           candidate == CAR.CHEVROLET_SILVERADO and ci.CP.openpilotLongitudinalControl)
           if candidate != CAR.CHEVROLET_SILVERADO:
             self.assertIsNone(candidate.config.specs.mass)
             self.assertIsNone(candidate.config.specs.wheelRadius)

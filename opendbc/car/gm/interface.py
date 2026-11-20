@@ -200,7 +200,7 @@ class CarInterface(CarInterfaceBase):
         ret.longitudinalActuatorDelay = 0.5
         ret.longitudinalTuning.kiBP = [2., 5., 10., 40. * CV.KPH_TO_MS, 60. * CV.KPH_TO_MS, 25.]
         ret.longitudinalTuning.kiV = [0.2, 0.02, 0.005, 0.05, 0.05, 0.001875]
-        ret.safetyConfigs[0].safetyParam |= GMSafetyFlags.SILVERADO_TORQUE.value
+        ret.safetyConfigs[0].safetyParam |= (GMSafetyFlags.SILVERADO_TORQUE | GMSafetyFlags.LATERAL_ONLY).value
       CarInterfaceBase.configure_torque_tune(candidate, ret.lateralTuning)
       ret.steerActuatorDelay = 0.27
       ret.minSteerSpeed = -1

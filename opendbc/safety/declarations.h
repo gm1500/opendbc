@@ -250,6 +250,8 @@ uint32_t microsecond_timer_get(void);
 
 void safety_tick(void);
 void safety_heartbeat(bool engaged);
+void safety_set_lateral_request(bool requested, bool enabled);
+void safety_set_lateral_request_flags(uint16_t flags);
 void safety_heartbeat_check(void);
 void safety_alternative_experience(int alt_exp);
 
@@ -279,6 +281,17 @@ typedef struct {
 typedef struct {
   // This can be set by the safety hooks
   bool controls_allowed;
+  // Separate, opted-in GM lateral permission; never grants gas or braking.
+  bool lateral_allowed;
+  bool lateral_armed;
+  bool lateral_requested;
+  bool lateral_enabled;
+  bool lateral_suspended;
+  bool lateral_rearm_grace;
+  bool gm_drive_gear;
+  bool gm_gear_valid;
+  uint32_t ts_lateral_request;
+  uint32_t ts_lateral_rearm;
   bool relay_malfunction;
   bool gas_pressed;
   bool gas_pressed_prev;
@@ -356,6 +369,7 @@ typedef struct {
   GmHardware gm_hw;
   const LongitudinalLimits *gm_long_limits;
   bool gm_pcm_cruise;
+  bool gm_lateral_only;
 
   bool honda_alt_brake_msg;
   bool honda_bosch_long;

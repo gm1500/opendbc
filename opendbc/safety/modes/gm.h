@@ -18,6 +18,32 @@
 #define GM_BTN_SET 3U
 #define GM_BTN_CANCEL 6U
 
+// Both leases are checked at each TX, not just the 1 Hz safety tick.
+static void gm_refresh_lateral_permission(void) {
+  const uint32_t LEASE_US = 500000U;
+  if (safety_get_ts_elapsed(safety_ts, safety.ts_lateral_rearm) >= LEASE_US) {
+    safety.lateral_rearm_grace = false;
+  }
+  bool healthy = safety_setup.gm_lateral_only && safety.gm_gear_valid &&
+                 !safety.relay_malfunction && !safety.steering_disengage &&
+                 (safety_get_ts_elapsed(safety_ts, safety.ts_lateral_request) < LEASE_US);
+  for (int i = 0; i < safety_setup.current_safety_config.rx_checks_len; i++) {
+    const RxStatus *status = &safety.rx_status[i];
+    healthy = healthy && status->msg_seen && status->valid_checksum && status->valid_quality_flag &&
+              (status->wrong_counters < 5) &&
+              (safety_get_ts_elapsed(safety_ts, status->last_timestamp) < LEASE_US);
+  }
+  // A permission that was granted cannot silently recover from a safety fault.
+  if (safety.lateral_armed && safety.lateral_enabled && !healthy) {
+    safety.lateral_suspended = true;
+  }
+  safety.lateral_allowed = healthy && safety.lateral_enabled && safety.lateral_requested && !safety.lateral_suspended &&
+                           safety.gm_drive_gear && !safety.brake_pressed && !safety.regen_braking;
+  if (safety.lateral_allowed) {
+    safety.lateral_armed = true;
+  }
+}
+
 static void gm_rx_hook(const CANPacket_t *msg) {
   const uint32_t GM_STANDSTILL_THRSLD = 10U;  // 0.311kph
 
@@ -43,14 +69,30 @@ static void gm_rx_hook(const CANPacket_t *msg) {
     bool res = (button == GM_BTN_RESUME) && (safety.cruise_button_prev != GM_BTN_RESUME);
     if (set || res) {
       safety.controls_allowed = true;
+      safety.lateral_suspended = false;
+      if (safety_setup.gm_lateral_only) {
+        // Allow the host to observe this physical button before relatching an
+        // old host fault snapshot. Fault requests still deny lateral permission.
+        safety.lateral_rearm_grace = true;
+        safety.ts_lateral_rearm = safety_ts;
+      }
     }
 
     // exit controls on cancel press
     if (button == GM_BTN_CANCEL) {
       safety.controls_allowed = false;
+      if (safety_setup.gm_lateral_only) {
+        safety.lateral_suspended = true;
+      }
     }
 
     safety.cruise_button_prev = button;
+  }
+
+  if (safety_setup.gm_lateral_only && msg_matches(msg, 0x1F5U, 0U)) {
+    const uint8_t gear = msg->data[3] & 0xFU;
+    safety.gm_drive_gear = gear == 4U;
+    safety.gm_gear_valid = gear <= 7U;
   }
 
   // Reference for brake pressed signals:
@@ -90,6 +132,7 @@ static bool gm_tx_hook(const CANPacket_t *msg) {
   };
 
   bool tx = true;
+  gm_refresh_lateral_permission();
 
   // BRAKE: safety check
   if (msg->addr == 0x315U) {
@@ -106,7 +149,8 @@ static bool gm_tx_hook(const CANPacket_t *msg) {
 
     bool steer_req = GET_BIT(msg, 3U);
 
-    if (steer_torque_cmd_checks(desired_torque, steer_req, GM_STEERING_LIMITS)) {
+    if (steer_torque_cmd_checks_with_permission(desired_torque, steer_req, GM_STEERING_LIMITS,
+                                                safety.controls_allowed || safety.lateral_allowed)) {
       tx = false;
     }
   }
@@ -145,6 +189,7 @@ static safety_config gm_init(uint16_t param) {
   const uint16_t GM_PARAM_EV = 4;
   const uint16_t GM_PARAM_HW_CAM_LONG = 2;
   const uint16_t GM_PARAM_SILVERADO_TORQUE = 8;
+  const uint16_t GM_PARAM_LATERAL_ONLY = 16;
 
   // common safety checks assume unscaled integer values
   enum { GM_GAS_TO_CAN = 8 };  // 1 / 0.125
@@ -199,6 +244,11 @@ static safety_config gm_init(uint16_t param) {
     GM_COMMON_RX_CHECKS
   };
 
+  static const RxCheck gm_lateral_rx_checks[] = {
+    GM_COMMON_RX_CHECKS
+    {.msg = {{0x1F5, 0, 8, 10U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
+  };
+
   static const RxCheck gm_ev_rx_checks[] = {
     GM_COMMON_RX_CHECKS
     {.msg = {{0xBD, 0, 7, 40U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
@@ -238,6 +288,12 @@ static safety_config gm_init(uint16_t param) {
   const bool gm_ev = GET_FLAG(param, GM_PARAM_EV);
   if (gm_ev) {
     SET_RX_CHECKS(gm_ev_rx_checks, ret);
+  }
+
+  safety_setup.gm_lateral_only = (safety_setup.gm_hw == GM_CAM) && !safety_setup.gm_pcm_cruise && !gm_ev &&
+                                 GET_FLAG(param, GM_PARAM_SILVERADO_TORQUE | GM_PARAM_LATERAL_ONLY);
+  if (safety_setup.gm_lateral_only) {
+    SET_RX_CHECKS(gm_lateral_rx_checks, ret);
   }
 
   // ASCM does not forward any messages

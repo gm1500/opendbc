@@ -81,6 +81,7 @@ class GMSafetyFlags(IntFlag):
   HW_CAM_LONG = 2
   EV = 4
   SILVERADO_TORQUE = 8
+  LATERAL_ONLY = 16
 
 
 class GMFlags(IntFlag):
