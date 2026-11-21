@@ -65,7 +65,7 @@ static void gm_rx_hook(const CANPacket_t *msg) {
     uint8_t button = (msg->data[5] & 0x70U) >> 4;
 
     // enter controls on falling edge of set or rising edge of resume (avoids fault)
-    bool set = (button != GM_BTN_SET) && (safety.cruise_button_prev == GM_BTN_SET);
+    bool set = (button != GM_BTN_SET) && (button != GM_BTN_CANCEL) && (safety.cruise_button_prev == GM_BTN_SET);
     bool res = (button == GM_BTN_RESUME) && (safety.cruise_button_prev != GM_BTN_RESUME);
     if (set || res) {
       safety.controls_allowed = true;
@@ -78,12 +78,10 @@ static void gm_rx_hook(const CANPacket_t *msg) {
       }
     }
 
-    // exit controls on cancel press
+    // Cancel only exits cruise; independently requested lateral permission and
+    // an existing lateral fault latch retain their state.
     if (button == GM_BTN_CANCEL) {
       safety.controls_allowed = false;
-      if (safety_setup.gm_lateral_only) {
-        safety.lateral_suspended = true;
-      }
     }
 
     safety.cruise_button_prev = button;

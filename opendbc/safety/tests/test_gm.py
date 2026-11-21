@@ -376,8 +376,8 @@ class TestGmSilveradoLateralOnlySafety(TestGmSilveradoCameraLongitudinalSafety):
         self.safety.safety_set_lateral_request_flags(3)
         self.assertFalse(self._tx(self._torque_cmd_msg(1)))
 
-  def test_lateral_physical_rearm_never_masks_independent_fault_or_cancel(self):
-    for fault in ('invalid_gear', 'relay', 'cancel', 'unknown_flags', 'stale_can'):
+  def test_lateral_physical_rearm_never_masks_independent_fault(self):
+    for fault in ('invalid_gear', 'relay', 'unknown_flags', 'stale_can'):
       with self.subTest(fault=fault):
         self._reset_safety_hooks()
         self._enable_lateral()
@@ -389,8 +389,6 @@ class TestGmSilveradoLateralOnlySafety(TestGmSilveradoCameraLongitudinalSafety):
           self._rx(self._gear_msg(15))
         elif fault == 'relay':
           self.safety.set_relay_malfunction(True)
-        elif fault == 'cancel':
-          self._rx(self._button_msg(Buttons.CANCEL))
         elif fault == 'unknown_flags':
           self.safety.safety_set_lateral_request_flags(8)
         else:
@@ -421,29 +419,64 @@ class TestGmSilveradoLateralOnlySafety(TestGmSilveradoCameraLongitudinalSafety):
     self.assertTrue(self._tx(self._torque_cmd_msg(1)))
     self.assertFalse(self.safety.get_controls_allowed())
 
-  def test_lateral_cancel_latches_through_readiness_recovery(self):
+  def test_cancel_preserves_lateral_state_and_only_disengages_longitudinal(self):
+    for state in ('active', 'off', 'not_requested', 'brake', 'fault'):
+      for cruise_enabled in (False, True):
+        for previous_button in (Buttons.UNPRESS, Buttons.DECEL_SET):
+          with self.subTest(state=state, cruise_enabled=cruise_enabled, previous_button=previous_button):
+            self._reset_safety_hooks()
+            self._enable_lateral()
+            self._rx(self._button_msg(previous_button))
+            if state == 'off':
+              self.safety.safety_set_lateral_request(False, False)
+            elif state == 'not_requested':
+              self.safety.safety_set_lateral_request(False, True)
+            elif state == 'brake':
+              self._rx(self._user_brake_msg(True))
+            elif state == 'fault':
+              self.safety.safety_set_lateral_request_flags(6)
+            self.safety.set_controls_allowed(cruise_enabled)
+            before = tuple(getattr(self.safety.safety_a.state, field) for field in
+                           ('lateral_enabled', 'lateral_requested', 'lateral_suspended', 'lateral_armed', 'lateral_rearm_grace'))
+            # Press, hold and release Cancel: no host heartbeat or rearm is needed.
+            for button in (Buttons.CANCEL, Buttons.CANCEL, Buttons.UNPRESS):
+              self._rx(self._button_msg(button))
+              self.assertFalse(self.safety.get_controls_allowed())
+              after = tuple(getattr(self.safety.safety_a.state, field) for field in
+                            ('lateral_enabled', 'lateral_requested', 'lateral_suspended', 'lateral_armed', 'lateral_rearm_grace'))
+              self.assertEqual(before, after)
+              self.assertEqual(self._tx(self._torque_cmd_msg(1)), state == 'active')
+              self.assertFalse(self._tx(self._send_gas_msg(1)))
+              self.assertFalse(self._tx(self._send_brake_msg(1)))
+            if state == 'brake':
+              self._rx(self._user_brake_msg(False))
+              self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+              self.assertFalse(self.safety.get_controls_allowed())
+
+  def test_cancel_does_not_rearm_a_fault_even_after_set_press(self):
     self._enable_lateral()
+    self.safety.safety_set_lateral_request_flags(6)
+    self._rx(self._button_msg(Buttons.DECEL_SET))
     self._rx(self._button_msg(Buttons.CANCEL))
-    self.assertFalse(self._tx(self._torque_cmd_msg(1)))
+    self._rx(self._button_msg(Buttons.UNPRESS))
+    self.safety.safety_set_lateral_request_flags(3)
     self.assertTrue(self.safety.safety_a.state.lateral_suspended)
-    self.safety.safety_set_lateral_request(False, True)
-    self.safety.safety_set_lateral_request(True, True)
     self.assertFalse(self._tx(self._torque_cmd_msg(1)))
-    self.safety.safety_set_lateral_request(False, False)
-    self.safety.safety_set_lateral_request(True, True)
-    self.assertTrue(self._tx(self._torque_cmd_msg(1)))
     self.assertFalse(self.safety.get_controls_allowed())
 
-  def test_lateral_cancel_rearms_on_real_set_resume(self):
+  def test_lateral_fault_rearms_on_real_set_resume(self):
     for button in (Buttons.DECEL_SET, Buttons.RES_ACCEL):
       with self.subTest(button=button):
         self._reset_safety_hooks()
         self._enable_lateral()
+        self.safety.safety_set_lateral_request_flags(6)
         self._rx(self._button_msg(Buttons.CANCEL))
+        self.assertTrue(self.safety.safety_a.state.lateral_suspended)
         self._rx(self._button_msg(button))
         self._rx(self._button_msg(Buttons.UNPRESS))
         # Test lateral independently of the normal cruise permission these buttons grant.
         self.safety.set_controls_allowed(False)
+        self.safety.safety_set_lateral_request_flags(3)
         self.assertTrue(self._tx(self._torque_cmd_msg(1)))
 
   def test_lateral_request_expiry_latches(self):
