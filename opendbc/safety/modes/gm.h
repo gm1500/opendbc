@@ -68,7 +68,7 @@ static void gm_rx_hook(const CANPacket_t *msg) {
     bool set = (button != GM_BTN_SET) && (button != GM_BTN_CANCEL) && (safety.cruise_button_prev == GM_BTN_SET);
     bool res = (button == GM_BTN_RESUME) && (safety.cruise_button_prev != GM_BTN_RESUME);
     if (set || res) {
-      safety.controls_allowed = true;
+      enter_controls();
       safety.lateral_suspended = false;
       if (safety_setup.gm_lateral_only) {
         // Allow the host to observe this physical button before relatching an
@@ -81,7 +81,7 @@ static void gm_rx_hook(const CANPacket_t *msg) {
     // Cancel only exits cruise; independently requested lateral permission and
     // an existing lateral fault latch retain their state.
     if (button == GM_BTN_CANCEL) {
-      safety.controls_allowed = false;
+      exit_controls();
     }
 
     safety.cruise_button_prev = button;

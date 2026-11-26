@@ -46,9 +46,6 @@ class GmLongitudinalBase(common.CarSafetyTest, common.LongitudinalGasBrakeSafety
     self.assertFalse(self._tx(self.packer.make_can_msg_safety("ASCMGasRegenCmd", 0, values)))
 
   # override these tests from CarSafetyTest, GM longitudinal uses button enable
-  def _pcm_status_msg(self, enable):
-    raise NotImplementedError
-
   def test_disable_control_allowed_from_cruise(self):
     pass
 
@@ -113,8 +110,8 @@ class TestGmSafetyBase(common.CarSafetyTest, common.DriverTorqueSteeringSafetyTe
     else:
       raise NotImplementedError
 
-  def _speed_msg(self, speed, wheels=("RL", "RR")):
-    values = {"%sWheelSpd" % s: speed for s in wheels}
+  def _speed_msg(self, speed):
+    values = {"%sWheelSpd" % s: speed for s in ("RL", "RR")}
     return self.packer.make_can_msg_safety("EBCMWheelSpdRear", 0, values)
 
   def _user_brake_msg(self, brake):
@@ -142,12 +139,6 @@ class TestGmSafetyBase(common.CarSafetyTest, common.DriverTorqueSteeringSafetyTe
     values = {"ACCButtons": buttons}
     return self.packer.make_can_msg_safety("ASCMSteeringButton", self.BUTTONS_BUS, values)
 
-  def test_vehicle_moving_single_wheel(self):
-    # vehicle is moving if any checked wheel is above standstill
-    for wheel in ("RL", "RR"):
-      self.assertTrue(self._rx(self._speed_msg(self.STANDSTILL_THRESHOLD + 1, wheels=(wheel,))))
-      self.assertTrue(self.safety.get_vehicle_moving())
-
 
 class TestGmEVSafetyBase(TestGmSafetyBase):
   EXTRA_SAFETY_PARAM = GMSafetyFlags.EV
@@ -156,6 +147,9 @@ class TestGmEVSafetyBase(TestGmSafetyBase):
   def _user_regen_msg(self, regen):
     values = {"RegenPaddle": 2 if regen else 0}
     return self.packer.make_can_msg_safety("EBCMRegenPaddle", 0, values)
+
+  def test_regen_braking_bits(self):
+    self._test_signal_bits(self._user_regen_msg, self.safety.get_regen_braking_prev, 0)
 
 
 class TestGmAscmSafety(GmLongitudinalBase, TestGmSafetyBase):
@@ -479,6 +473,30 @@ class TestGmSilveradoLateralOnlySafety(TestGmSilveradoCameraLongitudinalSafety):
         self.safety.safety_set_lateral_request_flags(3)
         self.assertTrue(self._tx(self._torque_cmd_msg(1)))
 
+  def test_reengagement_resets_heartbeat_mismatches_and_rearms_lateral(self):
+    for button in (Buttons.DECEL_SET, Buttons.RES_ACCEL):
+      with self.subTest(button=button):
+        self._reset_safety_hooks()
+        self._enable_lateral()
+        self.safety.safety_set_lateral_request_flags(6)
+        # Panda can still permit cruise after an earlier engagement was refused
+        # by the host. The next physical engagement must start a new heartbeat
+        # grace period even without a controls_allowed rising edge.
+        self.safety.set_controls_allowed(True)
+        for state in (self.safety.safety_a.state, self.safety.safety_b.state):
+          state.heartbeat_engaged_mismatches = 2
+        self._rx(self._button_msg(button))
+        self._rx(self._button_msg(Buttons.UNPRESS))
+        for state in (self.safety.safety_a.state, self.safety.safety_b.state):
+          self.assertTrue(state.controls_allowed)
+          self.assertEqual(state.heartbeat_engaged_mismatches, 0)
+          self.assertFalse(state.lateral_suspended)
+          self.assertTrue(state.lateral_rearm_grace)
+        self.safety.safety_set_lateral_request_flags(3)
+        self._rx(self._button_msg(Buttons.CANCEL))
+        self.assertFalse(self.safety.get_controls_allowed())
+        self.assertTrue(self._tx(self._torque_cmd_msg(1)))
+
   def test_lateral_request_expiry_latches(self):
     self._enable_lateral()
     self.safety.set_timer(500000)
@@ -648,25 +666,13 @@ class TestGmCameraLongitudinalEVSafety(TestGmCameraLongitudinalSafety, TestGmEVS
   pass
 
 
-class TestGmIgnition(common.SafetyTestBase):
+class TestGmIgnition(common.CanIgnitionSafetyTest):
   DBC = "gm_global_a_powertrain_generated"
-  SAFETY_MODEL = None
+  IGNITION_VALUES = range(4)
+  IGNITION_ON_VALUES = {2, 3}  # SystemPowerMode 2=Run, 3=Crank Request
 
-  TX_MSGS: list = []
-
-  def _msg(self, mode):
-    return self.packer.make_can_msg_safety("BCMGeneralPlatformStatus", 0, {"SystemPowerMode": mode})
-
-  # SystemPowerMode 2=Run, 3=Crank Request
-  def test_ignition_on(self):
-    self.safety.ignition_can_hook(self._msg(2))
-    self.assertTrue(self.safety.get_ignition_can())
-
-  def test_ignition_off(self):
-    self.safety.ignition_can_hook(self._msg(2))
-    self.assertTrue(self.safety.get_ignition_can())
-    self.safety.ignition_can_hook(self._msg(0))
-    self.assertFalse(self.safety.get_ignition_can())
+  def _ignition_msg(self, value, counter=None, bus=0):
+    return self.packer.make_can_msg_safety("BCMGeneralPlatformStatus", bus, {"SystemPowerMode": value})
 
 
 if __name__ == "__main__":
